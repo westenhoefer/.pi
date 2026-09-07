@@ -1,0 +1,22 @@
+# Configuration-only repository. Runtime state and backups are private.
+/*
+!/.gitignore
+!/README.md
+!/agent/
+/agent/*
+!/agent/settings.json
+!/agent/AGENTS.md
+!/agent/extensions/
+!/agent/prompts/
+!/agent/themes/
+!/agent/skills/
+
+# Defense in depth for resources added under the allowed directories.
+**/node_modules/
+**/.env
+**/.env.*
+**/*.pem
+**/*.key
+**/auth.json
+**/credentials.json
+**/*.log
