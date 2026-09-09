@@ -1,0 +1,21 @@
+{
+  "provider": "exa",
+  "workflow": "none",
+  "autoOpenBrowser": false,
+  "allowBrowserCookies": false,
+  "fetchRouting": {
+    "providers": ["http"],
+    "allowRemoteHostedProviders": false
+  },
+  "githubClone": { "enabled": false },
+  "githubPrIssue": { "enabled": false },
+  "youtube": { "enabled": false },
+  "video": { "enabled": false },
+  "pdf": { "enabled": false },
+  "image": { "enabled": false },
+  "commands": {
+    "websearch": { "enabled": false },
+    "curator": { "enabled": false },
+    "google-account": { "enabled": false }
+  }
+}

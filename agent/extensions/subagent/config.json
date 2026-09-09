@@ -1,0 +1,23 @@
+{
+  "toolDescriptionMode": "compact",
+  "defaultSubagentContext": "fresh",
+  "timeoutMs": 900000,
+  "globalConcurrencyLimit": 2,
+  "maxActiveAsyncRunsPerSession": 2,
+  "maxSubagentSpawnsPerRun": 4,
+  "maxSubagentSpawnsPerSession": 20,
+  "maxSubagentDepth": 1,
+  "parallel": { "maxTasks": 4, "concurrency": 2 },
+  "artifactDir": "project",
+  "artifactConfig": { "cleanupDays": 0 },
+  "scheduledRuns": { "enabled": false },
+  "missions": { "enabled": false, "globalIndex": false },
+  "authorityPolicy": {
+    "discardWorktree": "forbid",
+    "destructiveCleanup": "forbid",
+    "spawnBudgetGrant": "confirm",
+    "scheduleCreate": "forbid",
+    "stopRun": "auto",
+    "steerRun": "auto"
+  }
+}

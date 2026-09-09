@@ -5,6 +5,8 @@
 !/agent/
 /agent/*
 !/agent/settings.json
+!/agent/web-search.json
+!/agent/agents/
 !/agent/AGENTS.md
 !/agent/extensions/
 !/agent/prompts/
