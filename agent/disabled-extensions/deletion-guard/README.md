@@ -1,4 +1,8 @@
-# Deletion guard
+# Deletion guard (disabled archive)
+
+**Not active.** Moved outside Pi extension auto-discovery after excessive false-positive interruptions. The worker no longer loads it and `/bg` no longer calls its approval function. Do not restore or explicitly load it without user approval. General behavioral filesystem safety rules remain active.
+
+The design/coverage below describes the **former enabled setup**, not current enforcement. Tests explicitly load the archived guard in isolation; the obsolete `/bg`-denial integration test was removed because that integration no longer exists.
 
 An accident-prevention extension for common deletion commands. **Not a sandbox or a complete shell/Python/PowerShell parser.** It does not execute input to discover paths, call an LLM to approve operations, or require Python/PowerShell to be installed.
 
@@ -55,11 +59,11 @@ From the `~/.pi` repository:
 
 ```bash
 # Parser, path-boundary, junction/symlink, and approval tests; integration tests skip explicitly.
-node --test agent/extensions/deletion-guard/test/*.test.mjs
+node --test agent/disabled-extensions/deletion-guard/test/*.test.mjs
 
-# Also test actual Pi hook registration, /bg denial, and existing background job behavior.
+# Also test archived Pi hook registration and current background job behavior.
 PI_TEST_PACKAGE_DIR='C:/Users/johan/AppData/Roaming/nvm/v26.8.1/node_modules/@earendil-works/pi-coding-agent' \
-PI_OFFLINE=1 node --test agent/extensions/deletion-guard/test/*.test.mjs agent/extensions/background-jobs/test/*.test.mjs
+PI_OFFLINE=1 node --test agent/disabled-extensions/deletion-guard/test/*.test.mjs agent/extensions/background-jobs/test/*.test.mjs
 ```
 
 Tests create isolated fake-worktree/sibling fixtures **inside** `agent/test-state/` in this repository, verify rejected targets retain sentinel files, and remove only their own fixture directories. No real outside-repository deletion is performed. PowerShell/Python examples are parsed as text, never executed. Real Pi hooks are exercised with a simulated confirmation UI; the interactive dialog still needs a manual check after `/reload`. Windows junction behavior is tested locally; POSIX-specific OS behavior has not been exercised on this machine. No dependencies are installed by these commands.

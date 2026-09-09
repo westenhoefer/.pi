@@ -1,6 +1,6 @@
 # Background jobs
 
-A small, session-owned background Bash runner. Uses Pi's public API, its bundled `typebox`, and the sibling deletion-guard module for `/bg` preflight. It does not implement subagents, provider configuration, scheduling, automatic installation, or a security sandbox.
+A small, session-owned background Bash runner. Uses Pi's public API and its bundled `typebox`. It does not implement subagents, provider configuration, scheduling, automatic installation, or a security sandbox.
 
 ## Use
 
@@ -18,7 +18,7 @@ Agent tools:
 - `job_logs({ id, maxBytes?, maxLines? })`
 - `job_stop({ id })`
 
-Commands run in the canonical current session directory. There is no alternate-cwd parameter or arbitrary-PID stop operation. Commands use Pi's default Bash resolver, which selects Git Bash on this Windows setup—not PowerShell or cmd. Custom `shellPath`, `commandPrefix`, overridden bash tools, and hooks registered specifically for `bash` are not inherited. The deletion-guard extension checks `job_start` separately. `/bg` is an explicit user command, not an agent tool call, and invokes the shared guard directly. Keep the sibling `deletion-guard/` directory installed.
+Commands run in the canonical current session directory. There is no alternate-cwd parameter or arbitrary-PID stop operation. Commands use Pi's default Bash resolver, which selects Git Bash on this Windows setup—not PowerShell or cmd. Custom `shellPath`, `commandPrefix`, overridden bash tools, and hooks registered specifically for `bash` are not inherited. `/bg` is an explicit user command, not an agent tool call. Neither entry point adds command/path approval checks.
 
 ## Lifecycle and bounds
 
@@ -39,7 +39,7 @@ The registry delegates execution and process-tree cancellation to Pi's public `c
 
 Keep commands in the foreground: no `&`, `nohup`, daemonization, or detached descendants. Pi's backend does not provide OS containment, and a successful shell exit is not proof that an intentionally detached descendant is gone. Force-killing Pi, machine failure, escaped descendants, or a failed OS kill can leave processes behind. This extension does not recover jobs, retry commands, or kill persisted PIDs after restart.
 
-Commands run with the user's permissions/environment plus current Pi session metadata. They may write/delete files, use credentials, access the network, or incur service costs. Existing safety instructions still apply. The companion [deletion guard](../deletion-guard/README.md) adds limited command/path screening, not containment. It covers `job_start` through a tool hook and `/bg` through a direct preflight call. Other bash-specific hooks are still not inherited.
+Commands run with the user's permissions/environment plus current Pi session metadata. They may write/delete files, use credentials, access the network, or incur service costs. Existing safety instructions still apply. There is no command/path enforcement in this runner. Bash-specific hooks are not inherited.
 
 ## Verification
 

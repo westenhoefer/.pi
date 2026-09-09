@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { fixture, quote } from "./fixture.mjs";
+import { fixture } from "./fixture.mjs";
 
 const piRoot = process.env.PI_TEST_PACKAGE_DIR;
 const skip = !piRoot && "Set PI_TEST_PACKAGE_DIR to run the real Pi-loader integration tests.";
@@ -32,7 +32,7 @@ async function emit(extension, eventName, event, ctx) {
 
 test("real Pi hooks gate bash, PowerShell, job_start, and !/!! but do not intercept ordinary file tools", { skip }, async (t) => {
   const f = await fixture(t);
-  const loaded = await load(["agent/extensions/deletion-guard/index.ts"]);
+  const loaded = await load(["agent/disabled-extensions/deletion-guard/index.ts"]);
   const extension = loaded.extensions[0];
   const ctx = context(f.workspace);
   for (const [toolName, command] of [
@@ -57,20 +57,5 @@ test("real Pi hooks gate bash, PowerShell, job_start, and !/!! but do not interc
   const headless = await emit(extension, "tool_call", { toolName: "job_start", input: { command: "rm ../outside/sentinel" } }, { ...ctx, hasUI: false });
   assert.equal(headless.block, true);
   assert.equal(ctx.prompts.length, 6);
-  assert.equal(await readFile(join(f.outside, "sentinel"), "utf8"), "preserve me");
-});
-
-test("/bg uses the shared guard even without the hook extension loaded, and denial launches no job", { skip }, async (t) => {
-  const f = await fixture(t);
-  const loaded = await load(["agent/extensions/background-jobs/index.ts"]);
-  const jobs = loaded.extensions[0];
-  const ctx = context(f.workspace);
-  t.after(() => emit(jobs, "session_shutdown", { reason: "quit" }, ctx));
-  await emit(jobs, "session_start", { reason: "startup" }, ctx);
-  await jobs.commands.get("bg").handler(`rm -rf ${quote(f.outside)}`, ctx);
-  const status = await jobs.tools.get("job_status").definition.execute("test", {}, undefined, undefined, ctx);
-  assert.deepEqual(status.details, []);
-  assert.equal(ctx.prompts.length, 1);
-  assert.ok(ctx.notifications.some(text => text.includes("Not approved")));
   assert.equal(await readFile(join(f.outside, "sentinel"), "utf8"), "preserve me");
 });

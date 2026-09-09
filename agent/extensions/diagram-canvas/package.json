@@ -1,0 +1,9 @@
+{
+  "name": "personal-pi-diagram-canvas",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "dependencies": {
+    "mermaid": "11.17.2"
+  }
+}

@@ -64,6 +64,15 @@ test("real timeout stops a long-running command", { skip }, async (t) => {
   assert.equal(registry.status(job.id).state, "timed_out");
 });
 
+test("Pi discovery excludes the archived guard", { skip }, async () => {
+  const { discoverAndLoadExtensions } = await import(pathToFileURL(join(piRoot, "dist/core/extensions/loader.js")).href);
+  const loaded = await discoverAndLoadExtensions([], process.cwd(), resolve("agent"));
+  assert.deepEqual(loaded.errors, []);
+  assert.ok(loaded.extensions.some(extension => extension.commands.has("bg")));
+  assert.ok(loaded.extensions.some(extension => extension.commands.has("loop")));
+  assert.equal(loaded.extensions.some(extension => extension.commands.has("deletion-guard")), false);
+});
+
 test("Pi loads the extension; headless launches fail; shutdown cancels owned work", { skip }, async (t) => {
   const { loadExtensions } = await import(pathToFileURL(join(piRoot, "dist/core/extensions/loader.js")).href);
   const loaded = await loadExtensions([resolve("agent/extensions/background-jobs/index.ts")], process.cwd());
@@ -93,6 +102,13 @@ test("Pi loads the extension; headless launches fail; shutdown cancels owned wor
   await until(async () => (await call("job_status", { id: quick.details.id })).details.state === "succeeded");
   assert.equal(messages.length, 1, "a normal completion is delivered once");
   assert.ok(notifications.some((text) => text.includes("quick") && text.includes("succeeded")));
+  // This dead branch never deletes anything. The former guard prompted on its
+  // compound/dynamic deletion syntax, so a successful /bg launch proves removal.
+  await extension.commands.get("bg").handler('if false; then rm "$UNSET_GUARD_TEST_TARGET"; fi', ctx);
+  const jobs = (await call("job_status", {})).details;
+  assert.equal(jobs.length, 2, "/bg launches without a deletion approval UI");
+  const bg = jobs.find(job => job.id !== quick.details.id);
+  await until(async () => (await call("job_status", { id: bg.id })).details.state === "succeeded");
   messages.length = 0;
   const started = await call("job_start", { command: nodeCommand("console.log(process.env.PI_SESSION_ID);setInterval(()=>{},1000)") });
   const id = started.details.id;

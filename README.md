@@ -13,8 +13,8 @@ The `.gitignore` is allowlist-based. Authentication, model stores, sessions, cac
 | `pi-web-access@0.28.0` | `agent/web-search.json` | Enabled; Exa search, raw results, direct HTTP fetching |
 | `pi-subagents@0.66.0` | `agent/extensions/subagent/config.json`, `agent/agents/`, `agent/settings.json` | Enabled; personal profiles and package skill, with bundled workflow prompts disabled |
 | Custom background jobs | `agent/extensions/background-jobs/` | Auto-discovered on `/reload` |
-| Deletion guard | `agent/extensions/deletion-guard/` | Auto-discovered on `/reload`; one-time confirmation for risky recognized deletion |
 | Bounded goal loop | `agent/extensions/goal-loop/` | Auto-discovered on `/reload`; explicitly start with `/loop [--delay <seconds>] <goal>` |
+| Local diagram canvas | `agent/extensions/diagram-canvas/` | Auto-discovered on `/reload`; pinned local Mermaid, browser canvas via `/canvas` |
 
 Packages are pinned in `agent/settings.json`, installed under `agent/npm/`, with dependency lifecycle scripts disabled for this installation. No global npm packages were changed. Review updates deliberately rather than using unpinned latest versions. The local dependency lockfile is runtime state and is not tracked by this configuration-only repository.
 
@@ -32,7 +32,7 @@ Personal profiles:
 - `reviewer`: read-only findings; no automatic fixes or shell execution.
 - `oracle`: read-only second opinion on decisions/plans.
 - `researcher`: public-source research; explicitly loads only the web-access extension.
-- `worker`: implementation of explicitly authorized tasks, one writer per shared scope; explicitly loads the deletion guard.
+- `worker`: implementation of explicitly authorized tasks, one writer per shared scope.
 
 These five profiles inherit both project and global instructions and the skills catalog. They use Pi's normal base prompt plus their role instructions, fresh task context, and foreground execution by default. The researcher can load its explicitly listed provider in the foreground; it does not depend on ambient extension discovery. Profiles do not grant nested delegation or unrelated extension tools. Bundled agents and workflow prompts are disabled so their broader defaults do not replace these profiles. The package also discovers the pre-existing `architecture-style-reviewer`, `spec-conformance-reviewer`, and `ui-ux-developer` definitions in `~/.agents/agents/`; those files were left unchanged and were not included in the five-profile inheritance verification.
 
@@ -46,18 +46,19 @@ The user also approved removal of package-created `C:\Users\johan\AppData\Local\
 
 Use `/bg <bash command>`, `/jobs`, `/job-logs <id>`, and `/job-stop <id>`. The agent gets `job_start`, `job_status`, `job_logs`, and `job_stop` tools. Jobs use Git Bash on Windows, are cancelled on session shutdown/reload, and retain bounded in-memory log tails without creating or cleaning log files. See [the extension README](agent/extensions/background-jobs/README.md) for limits, lifecycle semantics, caveats, and test commands.
 
-### Deletion guard
-
-The guard checks common Bash deletion, PowerShell `Remove-Item`/aliases, and inline Python deletion calls. Literal internal targets are allowed; outside/root/`.git` targets and unresolved syntax require one-time confirmation. Symlinks and Windows junctions are checked conservatively. It covers `bash`, `powershell`, `job_start`, `!`/`!!`, and `/bg`; risky commands are blocked when no confirmation UI is available. The worker profile explicitly loads it. `/deletion-guard` shows the current boundary. See [coverage, limitations, and tests](agent/extensions/deletion-guard/README.md).
-
 ### Bounded goal loop
 
 `/loop <goal>` starts a confirmed, session-local continuation loop: up to five automatic rounds, a 30-minute continuation window, and a default 60-second delay after Pi settles. Use `/loop --delay 15 <goal>` for a different per-loop delay (1–600 seconds). Normal input steers without resetting budgets; typing pauses the countdown. `/loop stop` cancels future rounds. Completion, blockers, missing checkpoints, aborts, background/delegation handoffs, and session lifecycle changes disarm it. No timers survive reload. See [contracts, limitations, and tests](agent/extensions/goal-loop/README.md).
 
+### Diagram canvas
+
+Ask Pi to explain code with a flowchart, sequence diagram, or state machine. It can create/update named Mermaid diagrams with explanations and repository-relative source notes, mark current/proposed/mixed designs and observed/inferred relationships, and open them in a local browser canvas. `/canvas` opens it; `/canvas status` reports whether it is listening; `/canvas close` stops the server. Zoom/pan, source inspection, render-error feedback, and sanitized SVG export are included. Mermaid is pinned locally; no hosted rendering or repository-file server is used. See [setup, controls, security boundaries, and tests](agent/extensions/diagram-canvas/README.md).
+
 ## Safety and reload
 
-- `agent/AGENTS.md` remains behavioral guidance and was not weakened or replaced. The guard adds enforcement only for its documented command subset.
-- Command screening is not an OS sandbox and cannot prove arbitrary scripts safe. Script files, other deletion APIs/tools, remote execution, and package-internal filesystem operations are not comprehensively intercepted. Existing package-owned cleanup approvals remain narrow exceptions, not general shell-deletion exemptions.
+- `agent/AGENTS.md` provides behavioral filesystem and approval rules, not an enforced sandbox. Those general rules remain in place.
+- The deletion guard is disabled because its conservative parser caused excessive interruptions. Its code/tests are archived under `agent/disabled-extensions/deletion-guard/`, outside auto-discovery; the worker and `/bg` no longer load it. Reload existing parent sessions and launch fresh children to unload old instances. No command/path enforcement is provided by that guard while disabled.
+- Existing package-owned cleanup approvals remain narrow exceptions, not general shell-deletion exemptions.
 - No MCP adapter is installed.
 - Default model remains `openai/gpt-6-astra`, medium thinking.
 

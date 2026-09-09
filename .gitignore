@@ -9,6 +9,7 @@
 !/agent/agents/
 !/agent/AGENTS.md
 !/agent/extensions/
+!/agent/disabled-extensions/
 !/agent/prompts/
 !/agent/themes/
 !/agent/skills/

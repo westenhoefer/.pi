@@ -41,7 +41,7 @@ Progress/completion are **model attestations, not independent proof**. Exact rep
 - Only the interactive **TUI** can start a loop. RPC, print, JSON, and the configured headless workers cannot start one. No loop is enabled by default.
 - Pi's `sendMessage` API has no asynchronous delivery receipt. Immediate exceptions stop the loop, but an internal asynchronous dispatch failure may leave it showing working until the deadline. The loop does not automatically retry dispatch. Use `/loop stop` if no work begins.
 - Generated rounds are visibly labeled custom messages, not fabricated user messages. They carry the original goal, latest checkpoint's next step, and unchanged-permissions reminders.
-- Existing deletion guards, approval requirements, and subagent protocol rules remain in force. This is scheduling convenience, not a sandbox or expanded authority.
+- Existing behavioral filesystem safety rules, approval requirements, and subagent protocol rules remain in force. This is scheduling convenience, not a sandbox or expanded authority.
 
 ## Design and verification
 

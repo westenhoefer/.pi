@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pi · Diagram canvas</title>
+<link rel="stylesheet" href="/app.css">
+<script type="module" src="/app.js"></script>
+</head>
+<body>
+<header><div><span class="eyebrow">PI / CODE EXPLANATIONS</span><h1>Diagram canvas</h1></div><div id="connection" role="status">Connecting…</div></header>
+<div class="layout">
+<nav aria-label="Diagrams"><h2>Diagrams</h2><div id="diagrams"></div><p class="hint">Ask Pi to add a diagram or expand a part of the system. Updates appear here.</p></nav>
+<main>
+<div class="heading"><div><span id="kind" class="badge">No diagram</span><h2 id="title">An empty canvas</h2></div><span id="revision"></span></div>
+<div class="toolbar" aria-label="Canvas controls"><button id="zoom-out" aria-label="Zoom out">−</button><button id="fit">Fit</button><button id="zoom-in" aria-label="Zoom in">+</button><button id="export" disabled>Export SVG</button><span>Drag to pan · scroll to zoom</span></div>
+<div id="viewport" tabindex="0" aria-label="Diagram viewport. Use plus, minus, arrows or zero to navigate."><div id="drawing"></div><p id="empty">Your diagrams will appear here.</p></div>
+<p id="render-status" role="status"></p>
+<details><summary>Mermaid source</summary><pre id="source"></pre></details>
+</main>
+<aside aria-label="Explanation and source references"><h2>How it works</h2><p id="explanation">The canvas explains code; it does not independently verify the agent’s interpretation.</p><h2>Code notes</h2><p class="hint">Observed means the agent reports reading the code. Inferred relationships need confirmation. Paths are references only; this page cannot read your files.</p><div id="references"></div></aside>
+</div>
+<div id="staging" aria-hidden="true"></div>
+</body>
+</html>

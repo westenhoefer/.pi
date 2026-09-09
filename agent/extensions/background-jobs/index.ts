@@ -4,7 +4,6 @@ import { stripVTControlCharacters } from "node:util";
 import { createLocalBashOperations, getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { isActive, JobRegistry, type JobSnapshot } from "./registry.ts";
-import { authorizeDeletion } from "../deletion-guard/approval.ts";
 
 function summary(job: JobSnapshot): string {
   const name = stripVTControlCharacters(job.name).replace(/[\x00-\x1f\x7f]/g, " ");
@@ -144,9 +143,6 @@ export default function backgroundJobs(pi: ExtensionAPI): void {
     description: "Start a Bash command as a session-owned background job: /bg <command>",
     async handler(args, ctx) {
       try {
-        // Slash commands bypass tool_call, so /bg uses the same guard directly.
-        const decision = await authorizeDeletion(args, ctx);
-        if (!decision.allowed) { ctx.ui.notify(decision.reason ?? "Deletion blocked.", "warning"); return; }
         ctx.ui.notify(summary(await start(ctx, args)), "info");
       } catch (error) { ctx.ui.notify(error instanceof Error ? error.message : String(error), "error"); }
     },
