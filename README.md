@@ -14,6 +14,7 @@ The `.gitignore` is allowlist-based. Authentication, model stores, sessions, cac
 | `pi-subagents@0.66.0` | `agent/extensions/subagent/config.json`, `agent/agents/`, `agent/settings.json` | Enabled; personal profiles and package skill, with bundled workflow prompts disabled |
 | Custom background jobs | `agent/extensions/background-jobs/` | Auto-discovered on `/reload` |
 | Deletion guard | `agent/extensions/deletion-guard/` | Auto-discovered on `/reload`; one-time confirmation for risky recognized deletion |
+| Bounded goal loop | `agent/extensions/goal-loop/` | Auto-discovered on `/reload`; explicitly start with `/loop [--delay <seconds>] <goal>` |
 
 Packages are pinned in `agent/settings.json`, installed under `agent/npm/`, with dependency lifecycle scripts disabled for this installation. No global npm packages were changed. Review updates deliberately rather than using unpinned latest versions. The local dependency lockfile is runtime state and is not tracked by this configuration-only repository.
 
@@ -48,6 +49,10 @@ Use `/bg <bash command>`, `/jobs`, `/job-logs <id>`, and `/job-stop <id>`. The a
 ### Deletion guard
 
 The guard checks common Bash deletion, PowerShell `Remove-Item`/aliases, and inline Python deletion calls. Literal internal targets are allowed; outside/root/`.git` targets and unresolved syntax require one-time confirmation. Symlinks and Windows junctions are checked conservatively. It covers `bash`, `powershell`, `job_start`, `!`/`!!`, and `/bg`; risky commands are blocked when no confirmation UI is available. The worker profile explicitly loads it. `/deletion-guard` shows the current boundary. See [coverage, limitations, and tests](agent/extensions/deletion-guard/README.md).
+
+### Bounded goal loop
+
+`/loop <goal>` starts a confirmed, session-local continuation loop: up to five automatic rounds, a 30-minute continuation window, and a default 60-second delay after Pi settles. Use `/loop --delay 15 <goal>` for a different per-loop delay (1–600 seconds). Normal input steers without resetting budgets; typing pauses the countdown. `/loop stop` cancels future rounds. Completion, blockers, missing checkpoints, aborts, background/delegation handoffs, and session lifecycle changes disarm it. No timers survive reload. See [contracts, limitations, and tests](agent/extensions/goal-loop/README.md).
 
 ## Safety and reload
 

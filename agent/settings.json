@@ -4,6 +4,7 @@
   "defaultProvider": "openai",
   "defaultModel": "gpt-6-astra",
   "defaultThinkingLevel": "medium",
+  "hideThinkingBlock": false,
   "packages": [
     {
       "source": "npm:pi-subagents@0.66.0",
