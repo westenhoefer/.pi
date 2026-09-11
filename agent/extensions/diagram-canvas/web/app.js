@@ -129,7 +129,16 @@ $("fit").addEventListener("click", fit);
 $("zoom-in").addEventListener("click", () => zoom(1.25));
 $("zoom-out").addEventListener("click", () => zoom(.8));
 $("viewport").addEventListener("wheel", event => {
-  event.preventDefault(); const box = $("viewport").getBoundingClientRect();
+  event.preventDefault();
+  if (event.shiftKey) {
+    // Some browsers already map Shift + wheel to deltaX.
+    const delta = event.deltaX || event.deltaY;
+    const unit = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16
+      : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? $("viewport").clientWidth : 1;
+    x -= delta * unit; transform();
+    return;
+  }
+  const box = $("viewport").getBoundingClientRect();
   zoom(event.deltaY < 0 ? 1.12 : 1 / 1.12, event.clientX - box.left, event.clientY - box.top);
 }, { passive: false });
 $("viewport").addEventListener("pointerdown", event => {

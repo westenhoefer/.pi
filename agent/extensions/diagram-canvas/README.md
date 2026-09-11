@@ -33,7 +33,7 @@ Steer from Pi: “expand cancellation,” “hide storage internals,” or “sh
 - Every diagram is labeled **current**, **proposed**, or **mixed**. Mixed diagrams must explain the distinction in their text/labels.
 - Code notes include repository-relative path, optional line/symbol, a responsibility/evidence note, and **observed** or **inferred** confidence. These are agent attestations, not independently checked facts. The server never reads source files or opens editor/file URLs.
 - Select a code note to highlight its flowchart/state element where Mermaid's generated IDs support it. Sequence actors and arbitrary shapes do not have guaranteed highlight mappings; their notes remain readable in the panel.
-- Drag to pan; scroll or use `+`/`−` to zoom; Fit resets the view. Keyboard: focus the viewport and use `+`, `-`, arrows, or `0` (fit).
+- Drag to pan; hold Shift while scrolling to pan horizontally; scroll without Shift or use `+`/`−` to zoom; Fit resets the view. Keyboard: focus the viewport and use `+`, `-`, arrows, or `0` (fit).
 - Export SVG downloads the displayed sanitized diagram through the browser. Explanation/reference notes are not embedded in that SVG. Export is disabled while rendering or after an error.
 - Mermaid source is visible in an expandable section. Render errors appear below the viewport and are reported to Pi without triggering another paid model turn. Failed feedback requests retry independently during normal local refresh; reports are coalesced by ID/revision and stale reports are discarded.
 

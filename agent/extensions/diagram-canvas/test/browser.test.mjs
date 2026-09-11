@@ -70,6 +70,44 @@ async function browserSession(t) {
   return { page, evaluate, events, repo, downloads };
 }
 
+test("Shift + wheel pans horizontally without zooming", { skip, timeout: 30_000 }, async t => {
+  const { store, server } = await canvas(t);
+  const { page, evaluate } = await browserSession(t);
+  store.put(diagram()); await page("Page.navigate", { url: server.url });
+  await until(() => store.status()[0].render.status === "ok");
+  const view = () => evaluate(`(() => {
+    const matrix = new DOMMatrix(getComputedStyle(document.getElementById('drawing')).transform);
+    return { x: matrix.e, y: matrix.f, scale: matrix.a };
+  })()`);
+  const wheel = options => evaluate(`(() => {
+    const event = new WheelEvent('wheel', { bubbles: true, cancelable: true, ...${JSON.stringify(options)} });
+    document.getElementById('viewport').dispatchEvent(event);
+    return event.defaultPrevented;
+  })()`);
+  const width = await evaluate("document.getElementById('viewport').clientWidth");
+  for (const [options, distance] of [
+    [{ deltaY: 80 }, 80],
+    [{ deltaY: -40 }, -40],
+    [{ deltaX: 60 }, 60],
+    [{ deltaX: -30, deltaY: -30 }, -30],
+    [{ deltaY: 3, deltaMode: 1 }, 48],
+    [{ deltaY: -1, deltaMode: 2 }, -width],
+    [{ deltaY: 0 }, 0],
+  ]) {
+    const before = await view();
+    assert.equal(await wheel({ shiftKey: true, ...options }), true);
+    const after = await view();
+    assert.ok(Math.abs(after.x - (before.x - distance)) < .01, JSON.stringify(options));
+    assert.equal(after.y, before.y);
+    assert.equal(after.scale, before.scale);
+  }
+  const beforeZoom = await view();
+  await wheel({ deltaY: -80 });
+  assert.ok((await view()).scale > beforeZoom.scale, "ordinary wheel still zooms in");
+  await wheel({ deltaY: 80 });
+  assert.ok(Math.abs((await view()).scale - beforeZoom.scale) < .00001, "ordinary wheel still zooms out");
+});
+
 test("real browser renders all three types, reports errors, updates notes, sanitizes SVG, and stays local", { skip, timeout: 90_000 }, async t => {
   const { store, server, origin } = await canvas(t);
   const { page, evaluate, events, repo, downloads } = await browserSession(t);
