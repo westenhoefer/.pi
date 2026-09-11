@@ -28,7 +28,9 @@ Commands run in the canonical current session directory. There is no alternate-c
 - Keeps the last **256 KiB of merged stdout/stderr per job**, in memory. No full-output spill files. Older bytes are discarded.
 - Log reads default to 16 KiB / 200 lines, with maxima of 50 KiB / 2000 lines (excluding the short status header). Terminal controls are stripped. Output is untrusted data.
 - Retains at most 32 jobs; starting another evicts the oldest finished entry, never an active entry. Maximum retained raw output is 8 MiB.
-- Completion generates a UI notification and a message for the next user turn. It does not automatically start another paid model turn.
+- Completion generates a UI notification. Jobs launched with `job_start` also send an automatic agent follow-up on success, failure, timeout, or cancellation: it starts a model turn when idle, or queues behind the current agent run. This may incur model usage. The agent should inspect `job_logs` and continue only the still-authorized task, respecting newer user instructions—not blindly retry failed or cancelled work.
+- Manually launched `/bg` jobs remain notification-only: their completion message waits for the next user turn and does not trigger a model call.
+- After `job_start`, the agent can continue independent work, then return control with a waiting update at a dependency barrier. Completion resumes it without a manual prompt; polling or sleeping merely to wait is unnecessary. Shutdown suppresses completion messages and automatic wake-ups.
 - Escape after launch does **not** stop a job. Use `job_stop` or `/job-stop`.
 - Session shutdown, `/reload`, `/new`, `/resume`, and `/fork` request cancellation and wait up to five seconds. History and output are not restored afterward. `/tree` remains in the same session; it neither stops jobs nor undoes their effects.
 - TUI and persistent RPC sessions can launch jobs. Print and JSON modes are rejected because they exit after the foreground task.
@@ -54,4 +56,4 @@ PI_TEST_PACKAGE_DIR='C:/Users/johan/AppData/Roaming/nvm/v26.8.1/node_modules/@ea
 PI_OFFLINE=1 node --test agent/extensions/background-jobs/test/*.test.mjs
 ```
 
-The integration tests start local Node processes, including a parent/grandchild cancellation canary. They make no model calls, install nothing, and create/delete no test files. Tests cover failure exits, missing working directories, bounded logs, timeout, capacity/eviction, unconfirmed cancellation, headless rejection, actual extension loading, and shutdown. Windows process-tree termination is tested locally; POSIX behavior relies on Pi's backend and has not been exercised on this machine.
+The integration tests start local Node processes, including a parent/grandchild cancellation canary. They make no model calls, install nothing, and create/delete no test files. Tests cover failure exits, missing working directories, bounded logs, timeout, capacity/eviction, unconfirmed cancellation, headless rejection, actual extension loading, agent-versus-manual completion delivery, exactly-once follow-ups for success/failure/timeout/cancellation, and shutdown suppression. Windows process-tree termination is tested locally; POSIX behavior relies on Pi's backend and has not been exercised on this machine.

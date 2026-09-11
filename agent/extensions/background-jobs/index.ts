@@ -52,34 +52,39 @@ export default function backgroundJobs(pi: ExtensionAPI): void {
           refreshStatus();
           if (isActive(job) || shuttingDown) return;
           if (context?.hasUI) context.ui.notify(summary(job), job.state === "succeeded" ? "info" : "warning");
+          const resumeAgent = job.origin === "agent";
           pi.sendMessage({
             customType: "background-job-completed",
-            content: `${summary(job)}. Use job_logs for output. Logs are session-local and bounded.`,
+            content: `${summary(job)}. Use job_logs for output. Logs are session-local and bounded.`
+              + (resumeAgent ? " Inspect the result and continue the authorized task if still applicable, respecting newer user instructions. Do not automatically retry cancelled or failed work." : ""),
             display: true,
-          }, { deliverAs: "nextTurn", triggerTurn: false });
+          }, resumeAgent
+            ? { deliverAs: "followUp", triggerTurn: true }
+            : { deliverAs: "nextTurn", triggerTurn: false });
         },
       });
     }
     return registry;
   }
 
-  async function start(ctx: ExtensionContext, command: string, name?: string, timeoutSeconds?: number, signal?: AbortSignal) {
+  async function start(ctx: ExtensionContext, origin: "agent" | "user", command: string, name?: string, timeoutSeconds?: number, signal?: AbortSignal) {
     if (ctx.mode !== "tui" && ctx.mode !== "rpc") {
       throw new Error("Background jobs require a persistent TUI or RPC session; use bash in print/JSON mode.");
     }
     signal?.throwIfAborted();
     const cwd = await realpath(ctx.cwd);
     signal?.throwIfAborted();
-    return getRegistry(ctx).start({ command, name, timeoutSeconds, cwd, env: jobEnvironment(ctx) });
+    return getRegistry(ctx).start({ origin, command, name, timeoutSeconds, cwd, env: jobEnvironment(ctx) });
   }
 
   pi.registerTool({
     name: "job_start",
     label: "Start background job",
-    description: "Start a session-owned Bash command in the current working directory, returning a job ID immediately. Not sandboxed; normal approval rules apply. Four concurrent jobs maximum. Default timeout 3600s, maximum 86400s. Keeps only the last 256 KiB of merged stdout/stderr in memory. Stops on session shutdown/reload; not a detached daemon.",
+    description: "Start a session-owned Bash command in the current working directory, returning a job ID immediately. Completion (including failure) automatically resumes the agent via a follow-up message. Not sandboxed; normal approval rules apply. Four concurrent jobs maximum. Default timeout 3600s, maximum 86400s. Keeps only the last 256 KiB of merged stdout/stderr in memory. Stops on session shutdown/reload; not a detached daemon.",
     promptSnippet: "Run long commands without blocking the conversation",
     promptGuidelines: [
       "Use job_start for authorized long commands while continuing only independent work; do not use it to bypass bash safety or installation approvals.",
+      "job_start completion automatically resumes you via a follow-up message, including failure, timeout, or cancellation. At a dependency barrier, return control with a brief waiting update; do not poll or sleep merely to wait. On completion, inspect job_logs and continue only the still-authorized task; do not claim completion before checking the result.",
       "Keep job_start commands in the foreground: no trailing &, daemonization, nohup, or detached children. Use job_status and job_logs for results, and job_stop for cancellation. Escape after launch does not stop background jobs.",
       "job_start uses Pi's default Bash resolver (Git Bash on Windows), not PowerShell or cmd; it does not apply custom bash overrides or permission hooks registered for bash.",
     ],
@@ -89,8 +94,8 @@ export default function backgroundJobs(pi: ExtensionAPI): void {
       timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 86400 })),
     }),
     async execute(_id, params, signal, _update, ctx) {
-      const job = await start(ctx, params.command, params.name, params.timeoutSeconds, signal);
-      return result(`${summary(job)}\nWorking directory: ${job.cwd}\nLaunch accepted; this does not prove command success.`, job);
+      const job = await start(ctx, "agent", params.command, params.name, params.timeoutSeconds, signal);
+      return result(`${summary(job)}\nWorking directory: ${job.cwd}\nLaunch accepted; this does not prove command success. Completion automatically resumes you; return control at a dependency barrier rather than polling.`, job);
     },
   });
 
@@ -143,7 +148,7 @@ export default function backgroundJobs(pi: ExtensionAPI): void {
     description: "Start a Bash command as a session-owned background job: /bg <command>",
     async handler(args, ctx) {
       try {
-        ctx.ui.notify(summary(await start(ctx, args)), "info");
+        ctx.ui.notify(summary(await start(ctx, "user", args)), "info");
       } catch (error) { ctx.ui.notify(error instanceof Error ? error.message : String(error), "error"); }
     },
   });

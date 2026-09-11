@@ -9,6 +9,7 @@ export interface JobSnapshot {
   name: string;
   command: string;
   cwd: string;
+  origin: "agent" | "user";
   state: JobState;
   startedAt: string;
   endedAt?: string;
@@ -19,6 +20,7 @@ export interface JobSnapshot {
 }
 
 export interface JobInput {
+  origin?: "agent" | "user";
   command: string;
   name?: string;
   cwd: string;
@@ -100,6 +102,7 @@ export class JobRegistry {
     const job: Job = {
       snapshot: {
         id: randomUUID().slice(0, 12), name, command: input.command, cwd: input.cwd,
+        origin: input.origin ?? "user",
         state: "running", startedAt: new Date().toISOString(), outputBytes: 0,
       },
       output: Buffer.alloc(0),

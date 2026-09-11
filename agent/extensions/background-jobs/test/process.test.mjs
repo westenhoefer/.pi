@@ -81,7 +81,7 @@ test("Pi loads the extension; headless launches fail; shutdown cancels owned wor
   assert.deepEqual([...extension.tools.keys()].sort(), ["job_logs", "job_start", "job_status", "job_stop"]);
   const notifications = [];
   const messages = [];
-  loaded.runtime.sendMessage = (message) => messages.push(message);
+  loaded.runtime.sendMessage = (message, options) => messages.push({ message, options });
   const ctx = {
     cwd: process.cwd(), mode: "tui", hasUI: true,
     sessionManager: { getSessionId: () => "test-session", getSessionFile: () => undefined },
@@ -101,6 +101,10 @@ test("Pi loads the extension; headless launches fail; shutdown cancels owned wor
   const quick = await call("job_start", { command: nodeCommand("console.log('completed')"), name: "quick" });
   await until(async () => (await call("job_status", { id: quick.details.id })).details.state === "succeeded");
   assert.equal(messages.length, 1, "a normal completion is delivered once");
+  assert.deepEqual(messages[0].options, { deliverAs: "followUp", triggerTurn: true });
+  assert.match(messages[0].message.content, new RegExp(quick.details.id));
+  assert.match(messages[0].message.content, /Inspect the result and continue the authorized task/);
+  assert.equal(quick.details.origin, "agent");
   assert.ok(notifications.some((text) => text.includes("quick") && text.includes("succeeded")));
   // This dead branch never deletes anything. The former guard prompted on its
   // compound/dynamic deletion syntax, so a successful /bg launch proves removal.
@@ -109,6 +113,29 @@ test("Pi loads the extension; headless launches fail; shutdown cancels owned wor
   assert.equal(jobs.length, 2, "/bg launches without a deletion approval UI");
   const bg = jobs.find(job => job.id !== quick.details.id);
   await until(async () => (await call("job_status", { id: bg.id })).details.state === "succeeded");
+  assert.equal(bg.origin, "user");
+  assert.equal(messages.length, 2);
+  assert.deepEqual(messages[1].options, { deliverAs: "nextTurn", triggerTurn: false });
+  assert.doesNotMatch(messages[1].message.content, /continue the authorized task/);
+
+  for (const state of ["failed", "timed_out", "cancelled"]) {
+    messages.length = 0;
+    const launched = await call("job_start", {
+      command: nodeCommand(state === "failed" ? "process.exitCode=7" : "console.log('ready');setInterval(()=>{},1000)"),
+      ...(state === "timed_out" ? { timeoutSeconds: 1 } : {}),
+    });
+    const id = launched.details.id;
+    if (state === "cancelled") {
+      await until(async () => (await call("job_logs", { id })).content[0].text.includes("ready"));
+      await call("job_stop", { id });
+    }
+    await until(async () => (await call("job_status", { id })).details.state === state);
+    assert.equal(messages.length, 1, `${state} completion is delivered once`);
+    assert.deepEqual(messages[0].options, { deliverAs: "followUp", triggerTurn: true });
+    assert.ok(messages[0].message.content.includes(id) && messages[0].message.content.includes(state));
+    await call("job_stop", { id });
+    assert.equal(messages.length, 1, "stopping a completed job does not wake the agent again");
+  }
   messages.length = 0;
   const started = await call("job_start", { command: nodeCommand("console.log(process.env.PI_SESSION_ID);setInterval(()=>{},1000)") });
   const id = started.details.id;
