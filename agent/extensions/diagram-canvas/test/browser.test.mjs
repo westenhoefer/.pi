@@ -70,6 +70,60 @@ async function browserSession(t) {
   return { page, evaluate, events, repo, downloads };
 }
 
+test("expand fills the window and keyboard zoom works outside the viewport", { skip, timeout: 30_000 }, async t => {
+  const { store, server } = await canvas(t);
+  const { page, evaluate } = await browserSession(t);
+  store.put(diagram()); await page("Page.navigate", { url: server.url });
+  await until(() => store.status()[0].render.status === "ok");
+  const view = () => evaluate(`(() => {
+    const viewport = document.getElementById('viewport');
+    const matrix = new DOMMatrix(getComputedStyle(document.getElementById('drawing')).transform);
+    return { width: viewport.clientWidth, height: viewport.clientHeight, scale: matrix.a,
+      cx: (viewport.clientWidth / 2 - matrix.e) / matrix.a,
+      cy: (viewport.clientHeight / 2 - matrix.f) / matrix.a };
+  })()`);
+  const key = (key, options = {}) => evaluate(`(() => {
+    const event = new KeyboardEvent('keydown', { key: ${JSON.stringify(key)}, bubbles: true, cancelable: true, ...${JSON.stringify(options)} });
+    document.activeElement.dispatchEvent(event); return event.defaultPrevented;
+  })()`);
+  await evaluate("document.getElementById('fit').focus()");
+  const initial = await view();
+  assert.equal(await key('+'), true);
+  assert.ok(Math.abs((await view()).scale / initial.scale - 1.25) < .0001);
+  assert.equal(await key('-'), true);
+  assert.ok(Math.abs((await view()).scale - initial.scale) < .0001);
+  for (const options of [{ ctrlKey: true }, { metaKey: true }, { altKey: true }, { isComposing: true }]) {
+    assert.equal(await key('+', options), false);
+  }
+  await evaluate("document.querySelector('details').open = true; document.getElementById('source').contentEditable = 'true'; document.getElementById('source').focus()");
+  assert.equal(await key('+'), false);
+  await evaluate("document.getElementById('source').contentEditable = 'false'; document.getElementById('expand').click()");
+  await until(async () => (await view()).width > initial.width);
+  const expanded = await view();
+  assert.ok(expanded.width > 1300 && expanded.height > initial.height);
+  assert.equal(expanded.scale, initial.scale);
+  assert.ok(Math.abs(expanded.cx - initial.cx) < .01 && Math.abs(expanded.cy - initial.cy) < .01);
+  assert.equal(await evaluate("document.getElementById('expand').getAttribute('aria-expanded')"), 'true');
+  assert.equal(await evaluate("getComputedStyle(document.querySelector('aside')).display"), 'none');
+  assert.equal(await key('='), true);
+  assert.ok((await view()).scale > expanded.scale);
+  assert.equal(await key('0'), true);
+  const fitted = await view();
+  assert.equal(await key('-'), true);
+  assert.ok((await view()).scale < fitted.scale);
+  assert.equal(await key('Escape'), true);
+  await until(async () => (await view()).width === initial.width);
+  assert.equal(await evaluate("document.activeElement.id"), 'expand');
+  assert.equal(await evaluate("document.getElementById('expand').textContent"), 'Expand');
+  await page("Emulation.setDeviceMetricsOverride", { width: 390, height: 700, deviceScaleFactor: 1, mobile: false });
+  await evaluate("document.getElementById('expand').click()");
+  await until(async () => (await view()).width < 390);
+  assert.ok((await view()).height > 400);
+  assert.equal(await evaluate("document.getElementById('expand').getBoundingClientRect().right < innerWidth"), true);
+  await evaluate("document.getElementById('expand').click()");
+  assert.equal(await evaluate("document.body.classList.contains('expanded')"), false);
+});
+
 test("Shift + wheel pans horizontally without zooming", { skip, timeout: 30_000 }, async t => {
   const { store, server } = await canvas(t);
   const { page, evaluate } = await browserSession(t);

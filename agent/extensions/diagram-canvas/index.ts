@@ -58,12 +58,12 @@ export default function diagramCanvas(pi: ExtensionAPI): void {
   const result = (text: string, details: unknown = {}) => ({ content: [{ type: "text" as const, text }], details });
   pi.registerTool({
     name: "diagram_put", label: "Update diagram",
-    description: "Create/update a named diagram in the session's LOCAL browser canvas. Supports flowchart, sequenceDiagram, stateDiagram-v2. Read relevant code first; distinguish current/proposed/mixed and observed/inferred references. Same id replaces the diagram. No files are read or written by this tool. Max 16 diagrams, 24k Mermaid characters, 40 references. No frontmatter, init directives, custom CSS, click actions, or external URLs. Call diagram_open to view, then diagram_status for browser-reported syntax errors; accepted/pending does not mean rendered.",
+    description: "Create/update a named diagram in the session's LOCAL browser canvas. Supports flowchart, sequenceDiagram, stateDiagram-v2. For sequenceDiagram, put each statement on its own line and avoid literal semicolons in message, Note, participant, and branch labels: Mermaid treats them as statement separators, even in label text. Rephrase with commas or 'then' instead. Read relevant code first; distinguish current/proposed/mixed and observed/inferred references. Same id replaces the diagram. No files are read or written by this tool. Max 16 diagrams, 24k Mermaid characters, 40 references. No frontmatter, init directives, custom CSS, click actions, or external URLs. Call diagram_open to view, then diagram_status for browser-reported syntax errors; accepted/pending does not mean rendered.",
     parameters: Type.Object({
       id: Type.String({ maxLength: 64, description: "Stable name using letters, digits, underscores and hyphens." }),
       title: Type.String({ maxLength: 160 }),
       kind: StringEnum(["current", "proposed", "mixed"] as const),
-      mermaid: Type.String({ maxLength: 24_000 }),
+      mermaid: Type.String({ maxLength: 24_000, description: "Mermaid source. For sequenceDiagram, use one statement per line and no literal semicolons in labels (including messages and Notes). Use commas or 'then', e.g. A->>B: Validate then save. Semicolons can split label text into invalid statements." }),
       explanation: Type.String({ maxLength: 6000, description: "Explain data flow, responsibilities, scope and important uncertainties. Plain text." }),
       references: Type.Array(Type.Object({
         element: Type.Optional(Type.String({ maxLength: 80, description: "Mermaid node/state ID to highlight when possible." })),

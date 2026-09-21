@@ -13,7 +13,7 @@
 <nav aria-label="Diagrams"><h2>Diagrams</h2><div id="diagrams"></div><p class="hint">Ask Pi to add a diagram or expand a part of the system. Updates appear here.</p></nav>
 <main>
 <div class="heading"><div><span id="kind" class="badge">No diagram</span><h2 id="title">An empty canvas</h2></div><span id="revision"></span></div>
-<div class="toolbar" aria-label="Canvas controls"><button id="zoom-out" aria-label="Zoom out">−</button><button id="fit">Fit</button><button id="zoom-in" aria-label="Zoom in">+</button><button id="export" disabled>Export SVG</button><span>Drag to pan · scroll to zoom · Shift + scroll to pan horizontally</span></div>
+<div class="toolbar" aria-label="Canvas controls"><button id="zoom-out" aria-label="Zoom out">−</button><button id="fit">Fit</button><button id="zoom-in" aria-label="Zoom in">+</button><button id="expand" aria-expanded="false" aria-controls="viewport" title="Fill the browser window; Escape to restore">Expand</button><button id="export" disabled>Export SVG</button><span>Drag to pan · scroll or +/− to zoom · Shift + scroll to pan horizontally</span></div>
 <div id="viewport" tabindex="0" aria-label="Diagram viewport. Use plus, minus, arrows or zero to navigate."><div id="drawing"></div><p id="empty">Your diagrams will appear here.</p></div>
 <p id="render-status" role="status"></p>
 <details><summary>Mermaid source</summary><pre id="source"></pre></details>

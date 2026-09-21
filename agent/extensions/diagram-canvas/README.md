@@ -27,13 +27,20 @@ User commands:
 
 Steer from Pi: “expand cancellation,” “hide storage internals,” or “show the failure path.” The browser is a viewer, not a separate chat session or code editor.
 
+## Sequence diagram syntax
+
+When authoring `sequenceDiagram` source, put each statement on its own line. Avoid literal semicolons in message, `Note`, participant, and branch labels: Mermaid treats semicolons as statement separators, even inside label text. Use commas or words such as “then” instead.
+
+For example, use `A->>B: Validate then save`, not `A->>B: Validate; save`. Likewise, use `Note over B: Reject removed user or memoize valid user`, not a semicolon-separated note. The `diagram_put` tool and its `mermaid` parameter both expose this guidance to the model. This is authoring guidance, not automatic source rewriting or parser validation. Still check `diagram_status` after rendering.
+
 ## Reading the canvas
 
 - Named diagrams on the left; diagram viewport in the middle; explanation and source notes on the right.
 - Every diagram is labeled **current**, **proposed**, or **mixed**. Mixed diagrams must explain the distinction in their text/labels.
 - Code notes include repository-relative path, optional line/symbol, a responsibility/evidence note, and **observed** or **inferred** confidence. These are agent attestations, not independently checked facts. The server never reads source files or opens editor/file URLs.
 - Select a code note to highlight its flowchart/state element where Mermaid's generated IDs support it. Sequence actors and arbitrary shapes do not have guaranteed highlight mappings; their notes remain readable in the panel.
-- Drag to pan; hold Shift while scrolling to pan horizontally; scroll without Shift or use `+`/`−` to zoom; Fit resets the view. Keyboard: focus the viewport and use `+`, `-`, arrows, or `0` (fit).
+- Drag to pan; hold Shift while scrolling to pan horizontally; scroll without Shift or use `+`/`−` to zoom; Fit resets the view. Keyboard: `+` (or `=`), `-`, and `0` (fit) work anywhere in the viewer except editable fields; browser Ctrl/Cmd shortcuts are left alone. Focus the viewport to pan with arrow keys.
+- **Expand** fills the browser window with the diagram and its controls, hiding the side panels and source. **Restore** or Escape returns to the normal layout. Resizing preserves your zoom and the diagram point at the viewport center; use Fit to show the whole diagram.
 - Export SVG downloads the displayed sanitized diagram through the browser. Explanation/reference notes are not embedded in that SVG. Export is disabled while rendering or after an error.
 - Mermaid source is visible in an expandable section. Render errors appear below the viewport and are reported to Pi without triggering another paid model turn. Failed feedback requests retry independently during normal local refresh; reports are coalesced by ID/revision and stale reports are discarded.
 

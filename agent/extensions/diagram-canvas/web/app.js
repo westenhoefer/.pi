@@ -19,6 +19,13 @@ function zoom(factor, cx = $("viewport").clientWidth / 2, cy = $("viewport").cli
   const next = Math.min(8, Math.max(.05, scale * factor));
   x = cx - (cx - x) * next / scale; y = cy - (cy - y) * next / scale; scale = next; transform();
 }
+function setExpanded(expanded) {
+  document.body.classList.toggle("expanded", expanded);
+  $("expand").textContent = expanded ? "Restore" : "Expand";
+  $("expand").setAttribute("aria-expanded", String(expanded));
+  recenterViewport();
+  $(expanded ? "viewport" : "expand").focus({ preventScroll: true });
+}
 function key(diagram) { return diagram ? `${diagram.id}:${diagram.revision}` : "empty"; }
 function highlight(element, button) {
   for (const node of $("drawing").querySelectorAll(".highlight")) node.classList.remove("highlight");
@@ -125,6 +132,16 @@ async function refresh() {
   if (!stopped) setTimeout(refresh, 1000);
 }
 
+$("expand").addEventListener("click", () => setExpanded(!document.body.classList.contains("expanded")));
+// Keep the same diagram point centered, without discarding the user's zoom/pan.
+let viewportWidth = $("viewport").clientWidth, viewportHeight = $("viewport").clientHeight;
+function recenterViewport() {
+  const width = $("viewport").clientWidth, height = $("viewport").clientHeight;
+  x += (width - viewportWidth) / 2; y += (height - viewportHeight) / 2;
+  viewportWidth = width; viewportHeight = height;
+  transform();
+}
+new ResizeObserver(recenterViewport).observe($("viewport"));
 $("fit").addEventListener("click", fit);
 $("zoom-in").addEventListener("click", () => zoom(1.25));
 $("zoom-out").addEventListener("click", () => zoom(.8));
@@ -150,11 +167,14 @@ $("viewport").addEventListener("pointermove", event => {
   if (pointer) { x = pointer.startX + event.clientX - pointer.x; y = pointer.startY + event.clientY - pointer.y; transform(); }
 });
 for (const event of ["pointerup", "pointercancel", "lostpointercapture"]) $("viewport").addEventListener(event, () => { pointer = undefined; $("viewport").classList.remove("dragging"); });
-$("viewport").addEventListener("keydown", event => {
-  if (event.key === "+" || event.key === "=") zoom(1.25);
+document.addEventListener("keydown", event => {
+  if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey || event.isComposing) return;
+  if (event.target instanceof HTMLElement && (event.target.isContentEditable || event.target.closest("input, textarea, select"))) return;
+  if (event.key === "Escape" && document.body.classList.contains("expanded")) setExpanded(false);
+  else if (event.key === "+" || event.key === "=") zoom(1.25);
   else if (event.key === "-") zoom(.8);
   else if (event.key === "0") fit();
-  else if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) {
+  else if (event.target === $("viewport") && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) {
     x += event.key === "ArrowLeft" ? 30 : event.key === "ArrowRight" ? -30 : 0;
     y += event.key === "ArrowUp" ? 30 : event.key === "ArrowDown" ? -30 : 0; transform();
   } else return;

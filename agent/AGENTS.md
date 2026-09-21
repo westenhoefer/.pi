@@ -24,3 +24,9 @@ These are behavioral instructions, not a sandbox or a per-command permission sys
 - Do not read or print credential stores, private keys, or tokens unless needed for an explicitly authorized task. Never include secrets in logs, commits, or shared output.
 
 When asking for approval, state the exact target, intended operation, and why it is needed. If uncertain, stop rather than broaden scope or bypass a restriction.
+
+# Subagent context guidance
+
+- Choose subagent context per task rather than prescribing one mode for every launch. Workers MAY use `context: "fork"` when prior conversation contains relevant requirements, decisions, constraints, or investigation history that would be lossy to summarize.
+- Use `context: "fresh"` for self-contained tasks or when an independent perspective is valuable, such as an unbiased review. Supply the necessary requirements and evidence in the handoff.
+- Forking provides a snapshot of conversation history, not live synchronization or additional authority. Always give the worker an explicit task and scope; inherited discussion is not permission to perform unrelated work.
