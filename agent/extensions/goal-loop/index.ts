@@ -3,6 +3,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { stripVTControlCharacters } from "node:util";
 import { GoalLoop, continuationPrompt, parseLoopStart } from "./loop.ts";
+import { ATTENTION_EVENT, type AttentionRequest } from "../notifications/contract.ts";
 
 const TYPE = "goal-loop";
 const safe = (value: string) => stripVTControlCharacters(value).replace(/[\x00-\x1f\x7f]/g, " ").slice(0, 240);
@@ -14,6 +15,21 @@ export default function goalLoopExtension(pi: ExtensionAPI): void {
   let generation = 0;
   let starting = false;
   let countdownLeaf: string | null | undefined;
+  let attentionKey = "";
+
+  function announceState(ctx: ExtensionContext): void {
+    const state = loop.state;
+    if (!state?.manual || sessionId !== ctx.sessionManager.getSessionId() || !["awaiting_approval", "stopped"].includes(state.phase)) return;
+    const key = `${state.round}:${state.phase}`;
+    if (key === attentionKey) return;
+    attentionKey = key;
+    const request: AttentionRequest = {
+      sessionId: ctx.sessionManager.getSessionId(),
+      kind: state.phase === "awaiting_approval" ? "loop_approval"
+        : state.checkpoint?.outcome === "done" ? "loop_done" : "loop_stopped",
+    };
+    pi.events.emit(ATTENTION_EVENT, request);
+  }
 
   function clearTimer(): void {
     if (timer) clearInterval(timer);
@@ -29,14 +45,18 @@ export default function goalLoopExtension(pi: ExtensionAPI): void {
     }
     const suffix = state.phase === "countdown"
       ? ctx.ui.getEditorText().trim() ? "typing; countdown paused" : `next in ${Math.max(0, Math.ceil((state.due! - Date.now()) / 1000))}s`
-      : "working";
-    ctx.ui.setStatus(TYPE, `Loop ${state.round}/5 · ${suffix} · /loop stop`);
+      : state.phase === "awaiting_approval" ? "approval required · /loop resume" : "working";
+    ctx.ui.setStatus(TYPE, `Loop ${state.round}/${state.maxRounds} · ${suffix} · /loop stop`);
   }
 
-  function stop(reason: string, ctx: ExtensionContext): void {
+  function stop(reason: string, ctx: ExtensionContext, silent = false): void {
     const active = loop.state && loop.state.phase !== "stopped";
     generation++;
+    // An abort, prompt, or other interruption overrides an unannounced completion.
+    if (loop.state) loop.state.checkpoint = undefined;
     loop.stop(reason);
+    if (silent && loop.state) attentionKey = `${loop.state.round}:stopped`;
+    else if (ctx.isIdle()) announceState(ctx);
     render(ctx);
     if (active) ctx.ui.notify(`Loop stopped: ${safe(reason)}`, "info");
   }
@@ -52,11 +72,12 @@ export default function goalLoopExtension(pi: ExtensionAPI): void {
   }
 
   function tick(ctx: ExtensionContext): void {
-    if (sessionId !== ctx.sessionManager.getSessionId()) return stop("Session changed.", ctx);
+    if (sessionId !== ctx.sessionManager.getSessionId()) return stop("Session changed.", ctx, true);
     const state = loop.state;
     if (!state || state.phase === "stopped") return render(ctx);
     if (loop.expired(Date.now())) {
       ctx.ui.notify(`Loop stopped: ${loop.state!.reason}`, "info");
+      if (ctx.isIdle()) announceState(ctx);
       return render(ctx);
     }
     if (state.phase === "countdown") {
@@ -75,16 +96,30 @@ export default function goalLoopExtension(pi: ExtensionAPI): void {
   }
 
   pi.registerCommand("loop", {
-    description: "Run /loop [--delay <seconds>] <goal> (5 rounds, 30m, default 60s); /loop status or /loop stop",
+    description: "Run /loop [--manual | --delay <seconds>] [--rounds <1–20>] <goal> (default 5 rounds; automatic mode 30m); /loop resume, status, or stop",
     async handler(args, ctx) {
       const command = args.trim();
       if (command === "stop") {
-        stop("Stopped by user. In-flight work is not aborted; use Escape if needed.", ctx);
+        stop("Stopped by user. In-flight work is not aborted; use Escape if needed.", ctx, true);
+        return;
+      }
+      if (command === "resume") {
+        if (ctx.mode !== "tui" || !ctx.isIdle() || ctx.hasPendingMessages()) return ctx.ui.notify("Wait for Pi to settle before approving another round.", "warning");
+        if (sessionId !== ctx.sessionManager.getSessionId()) {
+          stop("Session changed; start a new loop explicitly.", ctx, true);
+          return ctx.ui.notify("No manual loop awaiting approval in this session.", "warning");
+        }
+        if (!loop.resume(Date.now())) {
+          render(ctx);
+          return ctx.ui.notify(`No manual loop awaiting approval. ${safe(loop.state?.reason ?? "")}`, "warning");
+        }
+        render(ctx);
+        sendRound(ctx);
         return;
       }
       if (!command || command === "status") {
         const state = loop.state;
-        ctx.ui.notify(state ? `Loop ${state.phase}, round ${state.round}/5, delay ${state.delayMs / 1000}s\n${safe(state.goal)}\n${safe(state.reason ?? "User input steers; /loop stop cancels continuation.")}` : "No loop active. Use /loop [--delay <seconds>] <specific goal>.", "info");
+        ctx.ui.notify(state ? `Loop ${state.phase}, round ${state.round}/${state.maxRounds}, ${state.manual ? "manual approval, no deadline" : `delay ${state.delayMs / 1000}s, 30m deadline`}\n${safe(state.goal)}\n${safe(state.reason ?? "User input steers; /loop stop cancels continuation.")}` : "No loop active. Use /loop [--manual | --delay <seconds>] [--rounds <1–20>] <specific goal>.", "info");
         return;
       }
       if (ctx.mode !== "tui") return ctx.ui.notify("Goal loops require the interactive TUI; no headless/RPC auto-continuation.", "warning");
@@ -93,18 +128,20 @@ export default function goalLoopExtension(pi: ExtensionAPI): void {
       let options: ReturnType<typeof parseLoopStart>;
       try { options = parseLoopStart(command); }
       catch (error) { return ctx.ui.notify(error instanceof Error ? error.message : String(error), "warning"); }
-      const { goal, delayMs } = options;
+      const { goal, delayMs, manual, rounds } = options;
       starting = true;
       const attempt = ++generation;
       let approved = false;
       try {
-        approved = await ctx.ui.confirm("Start bounded goal loop?", `${stripVTControlCharacters(goal).replace(/[\x00-\x1f\x7f]/g, " ")}\n\nStarts now; up to 5 automatic work rounds, ${delayMs / 1000}s between rounds, 30m continuation budget. User input steers without resetting the budget. Model usage can incur costs. Existing permissions remain unchanged. /loop stop cancels future rounds; Escape aborts current work. Reload/session changes discard the loop.`);
+        approved = await ctx.ui.confirm("Start bounded goal loop?", `${stripVTControlCharacters(goal).replace(/[\x00-\x1f\x7f]/g, " ")}\n\nStarts now; up to ${rounds} work rounds, ${manual ? "explicit /loop resume approval between rounds, no time deadline" : `${delayMs / 1000}s between rounds, 30m continuation budget`}. User input steers without resetting the round budget. Model usage can incur costs. Existing permissions remain unchanged. /loop stop cancels future rounds; Escape aborts current work. Reload/session changes discard the loop.`);
       } catch {
         ctx.ui.notify("Loop confirmation failed; nothing started.", "warning");
       } finally { starting = false; }
       if (!approved || attempt !== generation || !ctx.isIdle() || ctx.hasPendingMessages()) return;
       sessionId = ctx.sessionManager.getSessionId();
-      loop.start(goal, Date.now(), delayMs);
+      loop.start(goal, Date.now(), delayMs, manual, rounds);
+      attentionKey = "";
+      pi.events.emit("goal-loop:started", { sessionId });
       timer = setInterval(() => tick(ctx), 1000);
       timer.unref();
       render(ctx);
@@ -125,7 +162,7 @@ export default function goalLoopExtension(pi: ExtensionAPI): void {
       if (signal?.aborted) throw new Error("Checkpoint cancelled.");
       loop.checkpoint(params);
       render(ctx);
-      return { content: [{ type: "text", text: `Loop checkpoint: ${params.outcome}. ${params.outcome === "continue" ? "Will evaluate continuation once Pi settles; summarize this chunk now." : "Automatic continuation stopped."}` }], details: { ...params } };
+      return { content: [{ type: "text", text: `Loop checkpoint: ${params.outcome}. ${params.outcome === "continue" ? "Will evaluate continuation once Pi settles; manual mode requires user approval. Summarize this chunk now." : "Loop continuation stopped."}` }], details: { ...params } };
     },
   });
 
@@ -136,12 +173,17 @@ export default function goalLoopExtension(pi: ExtensionAPI): void {
   });
   pi.on("before_agent_start", () => {
     if (loop.state && loop.state.phase !== "stopped") return {
-      message: { customType: TYPE, content: continuationPrompt(loop.state), display: false },
+      message: { customType: TYPE, content: loop.state.phase === "awaiting_approval"
+        ? "The manual loop is paused awaiting /loop resume. Respond to the user's message, but do not begin the next loop chunk or call loop_checkpoint. Feedback alone is not loop approval."
+        : continuationPrompt(loop.state), display: false },
     };
   });
   pi.on("user_bash", (_event, ctx) => { stop("User shell command takes precedence.", ctx); });
   pi.on("ui_prompt_start", (_event, ctx) => {
-    if (!starting) stop("User decision requested; restart explicitly when resolved.", ctx);
+    if (!starting) {
+      stop("User decision requested; restart explicitly when resolved.", ctx);
+      announceState(ctx);
+    }
   });
   pi.on("message_start", (event, ctx) => {
     const message = event.message;
@@ -165,9 +207,16 @@ export default function goalLoopExtension(pi: ExtensionAPI): void {
     loop.settled(Date.now());
     if (wasWorking && loop.state?.phase === "countdown") countdownLeaf = ctx.sessionManager.getLeafId();
     if (wasWorking && loop.state?.phase === "stopped") ctx.ui.notify(`Loop stopped: ${safe(loop.state.reason ?? "Stopped")}`, "info");
+    announceState(ctx);
     render(ctx);
   });
   pi.on("session_before_compact", (_event, ctx) => { stop("Compaction; restart explicitly after context recovery.", ctx); });
-  pi.on("session_before_tree", (_event, ctx) => { stop("Session tree navigation.", ctx); });
-  pi.on("session_shutdown", (_event, ctx) => { stop("Session shutdown/reload.", ctx); });
+  pi.on("session_before_tree", (_event, ctx) => { stop("Session tree navigation.", ctx, true); });
+  pi.on("session_switch", (_event, ctx) => { stop("Session changed.", ctx, true); });
+  pi.on("session_shutdown", (_event, ctx) => { stop("Session shutdown/reload.", ctx, true); });
+
+  pi.events.on("goal-loop:query", (data) => {
+    const query = data as { active?: boolean };
+    query.active = !!loop.state && loop.state.phase !== "stopped";
+  });
 }

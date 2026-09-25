@@ -13,7 +13,8 @@ The `.gitignore` is allowlist-based. Authentication, model stores, sessions, cac
 | `pi-web-access@0.28.0` | `agent/web-search.json` | Enabled; Exa search, raw results, direct HTTP fetching |
 | `pi-subagents@0.66.0` | `agent/extensions/subagent/config.json`, `agent/agents/`, `agent/settings.json` | Enabled; personal profiles and package skill, with bundled workflow prompts disabled |
 | Custom background jobs | `agent/extensions/background-jobs/` | Auto-discovered on `/reload` |
-| Bounded goal loop | `agent/extensions/goal-loop/` | Auto-discovered on `/reload`; explicitly start with `/loop [--delay <seconds>] <goal>` |
+| Bounded goal loop | `agent/extensions/goal-loop/` | Auto-discovered on `/reload`; `/loop [--manual \| --delay <seconds>] [--rounds <1–20>] <goal>` |
+| Opt-in notifications | `agent/extensions/notifications/` | Auto-discovered on `/reload`; `/notify <task>` and manual-loop approval alerts |
 | Local diagram canvas | `agent/extensions/diagram-canvas/` | Auto-discovered on `/reload`; pinned local Mermaid, browser canvas via `/canvas` |
 
 Packages are pinned in `agent/settings.json`, installed under `agent/npm/`, with dependency lifecycle scripts disabled for this installation. No global npm packages were changed. Review updates deliberately rather than using unpinned latest versions. The local dependency lockfile is runtime state and is not tracked by this configuration-only repository.
@@ -48,7 +49,13 @@ Use `/bg <bash command>`, `/jobs`, `/job-logs <id>`, and `/job-stop <id>`. The a
 
 ### Bounded goal loop
 
-`/loop <goal>` starts a confirmed, session-local continuation loop: up to five automatic rounds, a 30-minute continuation window, and a default 60-second delay after Pi settles. Use `/loop --delay 15 <goal>` for a different per-loop delay (1–600 seconds). Normal input steers without resetting budgets; typing pauses the countdown. `/loop stop` cancels future rounds. Completion, blockers, missing checkpoints, aborts, background/delegation handoffs, and session lifecycle changes disarm it. No timers survive reload. See [contracts, limitations, and tests](agent/extensions/goal-loop/README.md).
+`/loop <goal>` starts a confirmed, session-local continuation loop: up to five rounds by default, a 30-minute continuation window, and a default 60-second delay after Pi settles. Use `/loop --rounds 10 <goal>` to set a total of 1–20 rounds (including the first), or `/loop --delay 15 <goal>` for a different per-loop delay (1–600 seconds). Normal input steers without resetting budgets; typing pauses the countdown. `/loop stop` cancels future rounds. Completion, blockers, missing checkpoints, aborts, background/delegation handoffs, and session lifecycle changes disarm it. No timers survive reload. See [contracts, limitations, and tests](agent/extensions/goal-loop/README.md).
+
+`/loop --manual <goal>` pauses between iterations until `/loop resume` approves one next round, with desktop approval/completion alerts. Manual loops have no time deadline, even while awaiting approval; the selected round limit (default five) still applies. The 30-minute deadline applies only to automatic loops. Feedback alone does not resume a manual loop; terminal stops require a new loop.
+
+### Desktop notifications
+
+`/notify <task>` opts one task into desktop completion/input-needed alerts. Waiting for background/delegated work does not count as completion; the agent explicitly reports the overall task outcome. `/notify off` cancels the subscription, `/notify status` inspects it, and `/notify test` checks desktop delivery. Ordinary tasks and automatic loops remain silent. Windows uses a native PowerShell toast without installing packages or changing machine settings. Only generic statuses leave Pi. See [behavior, supported terminals, caveats, and tests](agent/extensions/notifications/README.md).
 
 ### Diagram canvas
 
