@@ -15,7 +15,7 @@ The `.gitignore` is allowlist-based. Authentication, model stores, sessions, cac
 | `pi-subagents@0.66.0` | `agent/extensions/subagent/config.json`, `agent/settings.json` | Retained but all package resources disabled; legacy configuration preserved |
 | Custom background jobs | `agent/extensions/background-jobs/` | Auto-discovered on `/reload` |
 | Bounded goal loop | `agent/extensions/goal-loop/` | Auto-discovered on `/reload`; `/loop [--manual \| --delay <seconds>] [--rounds <1–20>] <goal>` |
-| Opt-in notifications | `agent/extensions/notifications/` | Auto-discovered on `/reload`; `/notify <task>` and manual-loop approval alerts |
+| Opt-in notifications | `agent/extensions/notifications/` | Auto-discovered on `/reload`; `/notify enable\|disable`, task subscriptions, and manual-loop approval alerts |
 | Local diagram canvas | `agent/extensions/diagram-canvas/` | Auto-discovered on `/reload`; pinned local Mermaid, browser canvas via `/canvas` |
 
 Packages are pinned in `agent/settings.json`, installed under `agent/npm/`, with dependency lifecycle scripts disabled for this installation. No global npm packages were changed. Review updates deliberately rather than using unpinned latest versions. The local dependency lockfile is runtime state and is not tracked by this configuration-only repository.
@@ -58,7 +58,9 @@ Use `/bg <bash command>`, `/jobs`, `/job-logs <id>`, and `/job-stop <id>`. The a
 
 ### Desktop notifications
 
-`/notify <task>` opts one task into desktop completion/input-needed alerts. Waiting for background/delegated work does not count as completion; the agent explicitly reports the overall task outcome. `/notify off` cancels the subscription, `/notify status` inspects it, and `/notify test` checks desktop delivery. Ordinary tasks and automatic loops remain silent. Windows uses a native PowerShell toast without installing packages or changing machine settings. Only generic statuses leave Pi. See [behavior, supported terminals, caveats, and tests](agent/extensions/notifications/README.md).
+`/notify enable` permits agent-requested desktop alerts for the current session, including mid-loop, via `notify_send`. `/notify disable` revokes that permission and cancels any task subscription, without stopping work or changing manual-loop alerts. Permission resets on reload/session replacement. Inside a loop, the agent sends before its final `loop_checkpoint`; alerts do not approve another round.
+
+`/notify <task>` opts one task into desktop completion/input-needed alerts. Waiting for background/delegated work does not count as completion; the agent explicitly reports the overall task outcome. `/notify off` cancels the subscription, `/notify status` inspects it, and `/notify test` checks desktop delivery. Ordinary tasks and automatic loops remain silent unless session permission is enabled and the agent explicitly requests an alert. Windows uses a native PowerShell toast without installing packages or changing machine settings. Only generic statuses leave Pi. See [behavior, supported terminals, caveats, and tests](agent/extensions/notifications/README.md).
 
 ### Diagram canvas
 

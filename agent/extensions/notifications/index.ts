@@ -15,9 +15,15 @@ export function registerNotifications(pi: ExtensionAPI, deliver: Deliver): void 
   let sessionId: string | undefined;
   let interrupted = false;
   let generation = 0;
+  let enabledSessionId: string | undefined;
+
+  function sessionEnabled(ctx: ExtensionContext): boolean {
+    return ctx.mode === "tui" && enabledSessionId !== undefined && enabledSessionId === ctx.sessionManager.getSessionId();
+  }
 
   function render(ctx: ExtensionContext): void {
-    ctx.ui.setStatus(STATUS, task.active ? "Task notification armed · /notify off" : undefined);
+    const parts = [task.active ? "Task notification armed · /notify off" : "", sessionEnabled(ctx) ? "Agent notifications enabled · /notify disable" : ""].filter(Boolean);
+    ctx.ui.setStatus(STATUS, parts.join(" · ") || undefined);
   }
 
   function cancel(ctx: ExtensionContext): void {
@@ -27,20 +33,22 @@ export function registerNotifications(pi: ExtensionAPI, deliver: Deliver): void 
     render(ctx);
   }
 
-  async function notify(kind: AttentionKind, ctx: ExtensionContext): Promise<void> {
-    if (ctx.mode !== "tui") return;
+  async function notify(kind: AttentionKind, ctx: ExtensionContext): Promise<boolean> {
+    if (ctx.mode !== "tui") return false;
     // No custom transcript entry: notifications must not wake an agent or disarm a loop.
     ctx.ui.notify(ATTENTION_TEXT[kind], "info");
     const attempt = generation;
-    try { await deliver(kind); }
+    try { await deliver(kind); return true; }
     catch (error) {
       if (attempt === generation && context === ctx) ctx.ui.notify(`Desktop notification delivery failed: ${error instanceof Error ? error.message : "Unknown error"}. Use /notify test to retry.`, "warning");
+      return false;
     }
   }
 
   pi.on("session_start", (_event, ctx) => {
     context = ctx;
     sessionId = ctx.sessionManager.getSessionId();
+    enabledSessionId = undefined;
     cancel(ctx);
   });
   pi.events.on(ATTENTION_EVENT, data => {
@@ -54,16 +62,28 @@ export function registerNotifications(pi: ExtensionAPI, deliver: Deliver): void 
   pi.events.on("goal-loop:started", () => { if (context) cancel(context); });
 
   pi.registerCommand("notify", {
-    description: "Run /notify <task> with desktop alerts on completion/input needed; /notify off, status, or test",
+    description: "Session permission: /notify enable or disable (works mid-loop). Task alerts: /notify <task>; /notify off, status, or test.",
     async handler(args, ctx) {
       context = ctx;
       const command = args.trim();
+      if (command === "disable") {
+        enabledSessionId = undefined;
+        cancel(ctx);
+        ctx.ui.notify("Agent notifications disabled and task subscription cancelled. Running work and manual-loop alerts are unchanged; notifications already submitted cannot be recalled.", "info");
+        return;
+      }
       if (command === "off") { cancel(ctx); ctx.ui.notify("Task notifications cancelled. Running work is not aborted.", "info"); return; }
       if (!command || command === "status") {
-        ctx.ui.notify(task.active ? "Task notification armed until completion or /notify off." : "No task notification armed. Use /notify <task>.", "info");
+        ctx.ui.notify(`${sessionEnabled(ctx) ? "Agent notifications enabled for this session; /notify disable revokes permission." : "Agent notifications disabled; /notify enable permits mid-task and mid-loop alerts."}\n${task.active ? "Task notification armed until completion or /notify off." : "No task notification armed. Use /notify <task> for a one-task subscription."}`, "info");
         return;
       }
       if (ctx.mode !== "tui") return ctx.ui.notify("Desktop notifications require the interactive TUI.", "warning");
+      if (command === "enable") {
+        enabledSessionId = ctx.sessionManager.getSessionId();
+        render(ctx);
+        ctx.ui.notify("Agent notifications enabled for this session, including during loops. No task started or loop approval granted. /notify disable revokes permission; reload/session replacement resets it.", "info");
+        return;
+      }
       if (command === "test") { await notify("task_input", ctx); return; }
       if (task.active) return ctx.ui.notify("A /notify task is already armed. Use /notify off first.", "warning");
       if (!ctx.isIdle() || ctx.hasPendingMessages()) return ctx.ui.notify("Wait for Pi to settle before starting a /notify task.", "warning");
@@ -93,9 +113,34 @@ export function registerNotifications(pi: ExtensionAPI, deliver: Deliver): void 
     },
   });
 
-  pi.on("before_agent_start", (_event, ctx) => {
-    if (sessionId !== ctx.sessionManager.getSessionId()) cancel(ctx);
-    if (!task.active) return;
+  pi.registerTool({
+    name: "notify_send",
+    label: "Send session notification",
+    description: "Send a fixed generic desktop notification only when the user enabled /notify enable for this session. No armed task is required; works mid-loop. update reports a requested milestone, done reports completed work, needs_input requests user attention. Does not wake the agent, approve work, or advance a loop. Call before the final loop_checkpoint, never after it.",
+    promptGuidelines: [
+      "Use notify_send only for user-requested alerts, meaningful milestones, completed work, or needed human input—not every tool call. /notify enable permits notifications; it does not authorize additional work.",
+      "When a /notify task subscription is armed, use notify_checkpoint instead of sending duplicate task alerts. During a goal loop use notify_send before loop_checkpoint, which must remain the last tool call.",
+    ],
+    parameters: Type.Object({ kind: StringEnum(["update", "done", "needs_input"] as const) }),
+    async execute(_id, params, signal, _update, ctx) {
+      signal?.throwIfAborted();
+      if (!sessionEnabled(ctx)) throw new Error("Agent notifications are disabled for this session. Only the user can enable them with /notify enable.");
+      const kinds = { update: "agent_update", done: "task_done", needs_input: "task_input" } as const;
+      if (!Object.hasOwn(kinds, params.kind)) throw new Error("Unknown session notification kind.");
+      const kind = kinds[params.kind];
+      context = ctx;
+      if (!await notify(kind, ctx)) throw new Error("Desktop notification delivery failed. See the in-Pi warning; no automatic retry was attempted.");
+      return { content: [{ type: "text", text: "Desktop notification submitted. OS settings may suppress display. No task was armed and no loop approval was granted." }], details: { kind: params.kind } };
+    },
+  });
+
+  pi.on("before_agent_start", (event, ctx) => {
+    if (sessionId !== ctx.sessionManager.getSessionId()) { enabledSessionId = undefined; cancel(ctx); }
+    if (!task.active) {
+      // System guidance, not a custom message: an extra message would disarm goal-loop.
+      if (sessionEnabled(ctx)) return { systemPrompt: `${event.systemPrompt}\nThe user enabled session notifications with /notify enable. You may use notify_send for requested alerts, meaningful milestones, completion or needed input. Do not notify on every tool call. No armed /notify task is required. In a goal loop, send before the final loop_checkpoint; notification permission never grants loop approval or additional work.` };
+      return;
+    }
     return { message: { customType: STATUS, display: false, content:
       "The user opted into notifications for this task with /notify. At the end of a chunk, call notify_checkpoint as your LAST tool call, then give a brief summary. Use done ONLY when the whole authorized task is finished and background/delegated results have been consumed. Use needs_input when the user must decide or provide information. Use waiting while background work remains; do not claim completion or poll just to trigger a notification. Notifications grant no new authority. Never arm, restart, or expand this subscription yourself. Missing checkpoints send no completion notice." } };
   });
@@ -117,7 +162,7 @@ export function registerNotifications(pi: ExtensionAPI, deliver: Deliver): void 
   });
   pi.on("agent_settled", async (_event, ctx) => {
     context = ctx;
-    if (sessionId !== ctx.sessionManager.getSessionId()) { cancel(ctx); return; }
+    if (sessionId !== ctx.sessionManager.getSessionId()) { enabledSessionId = undefined; cancel(ctx); return; }
     if (!ctx.isIdle() || ctx.hasPendingMessages()) return;
     if (interrupted && task.active) { cancel(ctx); await notify("task_error", ctx); return; }
     const kind = task.settled();
@@ -125,8 +170,7 @@ export function registerNotifications(pi: ExtensionAPI, deliver: Deliver): void 
     if (kind) await notify(kind, ctx);
   });
   pi.on("session_before_tree", (_event, ctx) => { cancel(ctx); });
-  pi.on("session_switch", (_event, ctx) => { cancel(ctx); context = ctx; sessionId = ctx.sessionManager.getSessionId(); });
-  pi.on("session_shutdown", (_event, ctx) => { cancel(ctx); context = undefined; sessionId = undefined; });
+  pi.on("session_shutdown", (_event, ctx) => { enabledSessionId = undefined; cancel(ctx); context = undefined; sessionId = undefined; });
 }
 
 export default function notifications(pi: ExtensionAPI): void {

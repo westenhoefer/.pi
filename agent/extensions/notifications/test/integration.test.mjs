@@ -37,10 +37,13 @@ async function harness(t) {
   async function checkpoint(outcome) {
     return loaded.extensions[1].tools.get("notify_checkpoint").definition.execute("cp", { outcome }, undefined, undefined, ctx);
   }
+  async function send(kind = "update", signal) {
+    return loaded.extensions[1].tools.get("notify_send").definition.execute("send", { kind }, signal, undefined, ctx);
+  }
   async function settle() { idle = true; await emit("agent_settled"); }
   await emit("session_start");
   t.after(() => emit("session_shutdown"));
-  return { ctx, bus, delivered, sent, notices, statuses, loaded, command, checkpoint, emit, settle,
+  return { ctx, bus, delivered, sent, notices, statuses, loaded, command, checkpoint, send, emit, settle,
     setPending: value => { pending = value; }, setSession: value => { session = value; } };
 }
 
@@ -114,7 +117,7 @@ for (const stopReason of ["error", "aborted"]) {
   });
 }
 
-for (const event of ["session_before_tree", "session_switch", "session_shutdown"]) {
+for (const event of ["session_before_tree", "session_start", "session_shutdown"]) {
   test(`${event} cancels subscription without a stale desktop alert`, { skip }, async t => {
     const h = await harness(t); await h.command("notify", "task"); await h.checkpoint("done");
     await h.emit(event); await h.settle(); assert.deepEqual(h.delivered, []);
@@ -176,4 +179,114 @@ test("production notifier registers against installed SDK without sending a real
   const loaded = await loadExtensions([resolve("agent/extensions/notifications/index.ts")], process.cwd());
   assert.deepEqual(loaded.errors, []);
   assert.ok(loaded.extensions[0].commands.has("notify"));
+  assert.ok(loaded.extensions[0].tools.has("notify_send"));
+});
+
+test("session permission defaults off, enables repeatable fixed alerts without arming or dispatching a task", { skip }, async t => {
+  const h = await harness(t);
+  await assert.rejects(h.send(), /Only the user/);
+  await h.command("notify", "enable");
+  assert.match(h.statuses.get("task-notifications"), /Agent notifications enabled/);
+  assert.equal(h.sent.length, 0); assert.deepEqual(h.delivered, []);
+  await h.send("update"); await h.send("needs_input"); await h.send("done");
+  assert.deepEqual(h.delivered, ["agent_update", "task_input", "task_done"]);
+  assert.equal(h.sent.length, 0);
+  await assert.rejects(h.checkpoint("done"), /No \/notify task/);
+  await h.command("notify", "status"); assert.match(h.notices.at(-1), /enabled for this session/);
+  await h.command("notify", "disable"); await assert.rejects(h.send(), /disabled/);
+  assert.equal(h.statuses.get("task-notifications"), undefined);
+});
+
+test("enable works mid-loop, system guidance adds no competing message, and final loop checkpoint still governs approval", { skip }, async t => {
+  const h = await harness(t); await h.command("loop", "--manual task");
+  await h.command("notify", "enable"); // Parent is busy here, no task-arm or idle requirement.
+  const hook = h.loaded.extensions[1].handlers.get("before_agent_start")[0];
+  const guidance = await hook({ systemPrompt: "Existing system instructions" }, h.ctx);
+  assert.equal(guidance.message, undefined); assert.match(guidance.systemPrompt, /^Existing system instructions/);
+  assert.match(guidance.systemPrompt, /notify_send/);
+  await h.emit("tool_execution_start", { toolName: "notify_send" });
+  await h.send(); await h.emit("tool_execution_end", { toolName: "notify_send", isError: false });
+  const cp = h.loaded.extensions[0].tools.get("loop_checkpoint").definition;
+  await h.emit("tool_execution_start", { toolName: "loop_checkpoint" });
+  await cp.execute("cp", { outcome: "continue", progress: "Verified useful progress", next: "Synthesize after approval" }, undefined, undefined, h.ctx);
+  await h.emit("tool_execution_end", { toolName: "loop_checkpoint", isError: false });
+  await h.settle();
+  assert.deepEqual(h.delivered, ["agent_update", "loop_approval"]);
+  assert.match(h.statuses.get("goal-loop"), /approval required/);
+  assert.match(h.statuses.get("task-notifications"), /Agent notifications enabled/);
+  assert.equal(h.sent.length, 1); // Only the original loop message, no task or extra turn.
+  await h.command("notify", "disable");
+  assert.match(h.statuses.get("goal-loop"), /approval required/);
+  await assert.rejects(h.send(), /disabled/);
+});
+
+test("session enable survives loop start, task completion, and tree navigation; disable revokes task checkpoints too", { skip }, async t => {
+  const h = await harness(t); await h.command("notify", "enable");
+  await h.command("notify", "task"); await h.checkpoint("done"); await h.settle();
+  await h.send(); await h.emit("session_before_tree"); await h.send();
+  await h.command("loop", "--manual goal"); await h.send();
+  await h.command("loop", "stop"); await h.settle();
+  await h.command("notify", "another task"); await h.checkpoint("done");
+  await h.command("notify", "disable"); const count = h.delivered.length;
+  await h.settle(); assert.equal(h.delivered.length, count);
+  await assert.rejects(h.checkpoint("done"), /No \/notify task/);
+  await assert.rejects(h.send(), /disabled/);
+});
+
+test("off only cancels the task subscription, while disable revokes session permission", { skip }, async t => {
+  const h = await harness(t); await h.command("notify", "enable"); await h.command("notify", "task");
+  await h.command("notify", "off"); await h.send();
+  assert.deepEqual(h.delivered, ["agent_update"]);
+  await h.command("notify", "disable"); await assert.rejects(h.send(), /disabled/);
+});
+
+test("permission resets on reload, shutdown and replacement and never authorizes non-TUI callers", { skip }, async t => {
+  const h = await harness(t);
+  for (const event of ["session_start", "session_shutdown"]) {
+    await h.command("notify", "enable"); await h.emit(event);
+    await assert.rejects(h.send(), /disabled/);
+  }
+  await h.emit("session_start"); await h.command("notify", "enable");
+  h.setSession("replacement"); await assert.rejects(h.send(), /disabled/);
+  await h.emit("session_start"); await assert.rejects(h.send(), /disabled/);
+  for (const mode of ["rpc", "print", "json"]) {
+    h.ctx.mode = mode; await h.command("notify", "enable"); await assert.rejects(h.send(), /disabled/);
+  }
+  h.ctx.mode = "tui"; await assert.rejects(h.send(), /disabled/);
+  assert.deepEqual(h.delivered, []);
+});
+
+test("failed, invalid or aborted session sends do not claim delivery or arm a task", { skip }, async t => {
+  const h = await harness(t); await h.command("notify", "enable");
+  for (const kind of ["invalid", "toString", "__proto__"]) await assert.rejects(h.send(kind), /Unknown/);
+  const controller = new AbortController(); controller.abort();
+  await assert.rejects(h.send("update", controller.signal), /abort/i);
+  h.bus.emit("notifications:test-fail"); await assert.rejects(h.send(), /delivery failed/);
+  assert.deepEqual(h.delivered, []); assert.equal(h.sent.length, 0);
+  await assert.rejects(h.checkpoint("done"), /No \/notify task/);
+});
+
+for (const boundary of ["disable", "reload"]) {
+  test(`deferred delivery failure after ${boundary} rejects the send but suppresses stale warnings`, { skip }, async t => {
+    const h = await harness(t); await h.command("notify", "enable");
+    let rejectDelivery;
+    const promise = new Promise((_resolve, reject) => { rejectDelivery = reject; });
+    h.bus.emit("notifications:test-gate", { promise });
+    const rejected = assert.rejects(h.send(), /delivery failed/);
+    if (boundary === "disable") await h.command("notify", "disable");
+    else { await h.emit("session_shutdown"); await h.emit("session_start"); }
+    const notices = h.notices.length;
+    rejectDelivery(new Error("late backend failure")); await rejected;
+    assert.equal(h.notices.length, notices); assert.deepEqual(h.delivered, []);
+    await assert.rejects(h.send(), /disabled/);
+  });
+}
+
+test("new reserved words can still be dispatched as escaped tasks", { skip }, async t => {
+  const h = await harness(t);
+  for (const word of ["enable", "disable"]) {
+    await h.command("notify", `-- ${word}`); assert.equal(h.sent.at(-1), word);
+    await h.command("notify", "off"); await h.settle();
+  }
+  await assert.rejects(h.send(), /disabled/);
 });
