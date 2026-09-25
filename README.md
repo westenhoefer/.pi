@@ -11,7 +11,8 @@ The `.gitignore` is allowlist-based. Authentication, model stores, sessions, cac
 | Component | Configuration | Status |
 |---|---|---|
 | `pi-web-access@0.28.0` | `agent/web-search.json` | Enabled; Exa search, raw results, direct HTTP fetching |
-| `pi-subagents@0.66.0` | `agent/extensions/subagent/config.json`, `agent/agents/`, `agent/settings.json` | Enabled; personal profiles and package skill, with bundled workflow prompts disabled |
+| Session-owned subagents | `agent/extensions/simple-subagents/`, `agent/agents/` | Auto-discovered on `/reload`; parallel RPC children, steering, completion wakes, goal-loop coordination |
+| `pi-subagents@0.66.0` | `agent/extensions/subagent/config.json`, `agent/settings.json` | Retained but all package resources disabled; legacy configuration preserved |
 | Custom background jobs | `agent/extensions/background-jobs/` | Auto-discovered on `/reload` |
 | Bounded goal loop | `agent/extensions/goal-loop/` | Auto-discovered on `/reload`; `/loop [--manual \| --delay <seconds>] [--rounds <1–20>] <goal>` |
 | Opt-in notifications | `agent/extensions/notifications/` | Auto-discovered on `/reload`; `/notify <task>` and manual-loop approval alerts |
@@ -35,13 +36,15 @@ Personal profiles:
 - `researcher`: public-source research; explicitly loads only the web-access extension.
 - `worker`: implementation of explicitly authorized tasks, one writer per shared scope.
 
-These five profiles inherit both project and global instructions and the skills catalog. They use Pi's normal base prompt plus their role instructions, fresh task context, and foreground execution by default. The researcher can load its explicitly listed provider in the foreground; it does not depend on ambient extension discovery. Profiles do not grant nested delegation or unrelated extension tools. Bundled agents and workflow prompts are disabled so their broader defaults do not replace these profiles. The package also discovers the pre-existing `architecture-style-reviewer`, `spec-conformance-reviewer`, and `ui-ux-developer` definitions in `~/.agents/agents/`; those files were left unchanged and were not included in the five-profile inheritance verification.
+The custom supervisor uses these five personal profiles with fresh task context, inherited personal/project instructions and skills, explicit role tools/extensions, and the parent's model/thinking by default. Children run asynchronously in Pi RPC subprocesses. The legacy `async: false` profile fields are ignored by this supervisor. It does not discover additional project/shared agents or grant nested delegation.
 
-Configuration limits fan-out to two concurrent children, four cumulative spawns per run, twenty per session, and fifteen-minute default deadlines. Some package limits can be overridden per call; these are operating defaults, not a sandbox. Scheduled runs, automatic missions, and age-based session-artifact cleanup are disabled. Artifacts use the project `.pi/subagents/` directory. Exclude that directory from commits and package publishing in projects where this tooling is used.
+Use `subagent_start`, `subagent_status`, `subagent_steer`, and `subagent_stop`; `/subagents` shows exact IDs and `/subagents stop <id>` cancels one. A compact widget shows activity, and each finished child automatically wakes the parent with its answer/status. Limits are two concurrent children, twenty starts per session, and fifteen-minute default deadlines (up to one hour per task). Children share the cwd; use non-overlapping assignments and one writer per shared scope.
+
+Reload/session replacement/shutdown stops children and discards their in-memory history. There are no missions, workflow scripts, automatic worktrees, recovery, or detached survival. The supervisor integrates directly with goal-loop's waiting and approval policy. See [contracts, limitations and tests](agent/extensions/simple-subagents/README.md). The old package remains installed but unloaded, with its configuration and profiles preserved for reversibility.
 
 The user approved cleanup of package-owned run/cache files under `C:\Users\johan\AppData\Local\Temp\pi-subagents-user-johan`. This does not authorize worktree or source-file deletion.
 
-The user also approved removal of package-created `C:\Users\johan\AppData\Local\Temp\pi-subagents-tracked-diff-*` scratch directories used to fingerprint large Git diffs, including when Pi works in another repository. The extension and package skill are enabled; bundled workflow prompts remain disabled via `prompts: []`. These cleanup exceptions do not authorize worktree or source-file deletion. Do not enable managed worktrees, external CLI agents, or other cleanup features without checking their separate side effects.
+The user also approved removal of package-created `C:\Users\johan\AppData\Local\Temp\pi-subagents-tracked-diff-*` scratch directories used to fingerprint large Git diffs, including when Pi works in another repository. These legacy cleanup exceptions do not authorize worktree or source-file deletion; this migration performs no package cleanup. Do not enable managed worktrees, external CLI agents, or other cleanup features without checking their separate side effects.
 
 ### Background shell jobs
 
@@ -49,7 +52,7 @@ Use `/bg <bash command>`, `/jobs`, `/job-logs <id>`, and `/job-stop <id>`. The a
 
 ### Bounded goal loop
 
-`/loop <goal>` starts a confirmed, session-local continuation loop: up to five rounds by default, a 30-minute continuation window, and a default 60-second delay after Pi settles. Use `/loop --rounds 10 <goal>` to set a total of 1–20 rounds (including the first), or `/loop --delay 15 <goal>` for a different per-loop delay (1–600 seconds). Normal input steers without resetting budgets; typing pauses the countdown. `/loop stop` cancels future rounds. Completion, blockers, missing checkpoints, aborts, background/delegation handoffs, and session lifecycle changes disarm it. No timers survive reload. See [contracts, limitations, and tests](agent/extensions/goal-loop/README.md).
+`/loop <goal>` starts a confirmed, session-local continuation loop: up to five rounds by default, a 30-minute continuation window, and a default 60-second delay after Pi settles. Use `/loop --rounds 10 <goal>` to set a total of 1–20 rounds (including the first), or `/loop --delay 15 <goal>` for a different per-loop delay (1–600 seconds). Normal input steers without resetting budgets; typing pauses the countdown. `/loop stop` cancels future rounds. Completion, blockers, missing checkpoints, aborts, unsupported background handoffs, and session lifecycle changes disarm it. Session-owned subagents instead suspend the loop within the same round until their results are consumed; manual approval and budgets remain unchanged. No timers survive reload. See [contracts, limitations, and tests](agent/extensions/goal-loop/README.md).
 
 `/loop --manual <goal>` pauses between iterations until `/loop resume` approves one next round, with desktop approval/completion alerts. Manual loops have no time deadline, even while awaiting approval; the selected round limit (default five) still applies. The 30-minute deadline applies only to automatic loops. Feedback alone does not resume a manual loop; terminal stops require a new loop.
 
@@ -69,4 +72,4 @@ Ask Pi to explain code with a flowchart, sequence diagram, or state machine. It 
 - No MCP adapter is installed.
 - Default model remains `openai/gpt-6-astra`, medium thinking.
 
-Use `/reload` to load enabled extensions, agent resources, skills, and context files. Reload cancels custom background jobs and discards their in-memory history. Restart pi to apply startup defaults reliably; resumed sessions may restore model/thinking selections.
+Use `/reload` to load enabled extensions, agent resources, skills, and context files. Reload cancels custom background jobs and session-owned subagents and discards their in-memory history. Restart pi to apply startup defaults reliably; resumed sessions may restore model/thinking selections.

@@ -37,7 +37,7 @@ async function harness(t) {
   const command = (args) => extension.commands.get("loop").handler(args, ctx);
   const checkpoint = (outcome = "continue", progress = "New result; test passed") => extension.tools.get("loop_checkpoint").definition.execute("cp", { outcome, progress, next: outcome === "continue" ? "Verify remaining requirement" : "" }, undefined, undefined, ctx);
   async function settle() { idle = true; await emit("agent_settled"); }
-  return { ctx, sent, notices, statuses, attention, emit, command, checkpoint, settle, tick: ms => t.mock.timers.tick(ms), setIdle: value => { idle = value; }, setPending: value => { pending = value; }, setEditor: value => { editor = value; }, setSession: value => { session = value; }, setLeaf: value => { leaf = value; } };
+  return { ctx, bus, sent, notices, statuses, attention, emit, command, checkpoint, settle, tick: ms => t.mock.timers.tick(ms), setIdle: value => { idle = value; }, setPending: value => { pending = value; }, setEditor: value => { editor = value; }, setSession: value => { session = value; }, setLeaf: value => { leaf = value; } };
 }
 
 test("manual loop: notify once after settlement, feedback stays paused, resume approves one round", { skip }, async t => {
@@ -255,4 +255,45 @@ test("/loop stop cancels continuation, no model-callable restart", { skip }, asy
   const h = await harness(t); await h.command("goal"); await h.checkpoint(); await h.settle();
   await h.command("stop"); h.tick(60_000); assert.equal(h.sent.length, 1);
   await assert.rejects(h.checkpoint(), /Only the user/);
+});
+
+function registerChild(h, id) {
+  const query = { sessionId: "test", allowed: true };
+  h.bus.emit("simple-subagents:start-query:v1", query);
+  assert.equal(query.allowed, true); assert.ok(query.loopId);
+  h.bus.emit("simple-subagents:started:v1", { sessionId: "test", id, loopId: query.loopId });
+  return { sessionId: "test", id, loopId: query.loopId, state: "succeeded" };
+}
+const deliverChild = (h, details) => h.emit("message_start", { message: { role: "custom", customType: "simple-subagent-result", details } });
+
+test("owned completions resume the same round and manual launch admission stays closed until approval", { skip }, async t => {
+  const h = await harness(t); await h.command("--manual goal");
+  const a = registerChild(h, "a"), b = registerChild(h, "b");
+  await h.checkpoint("waiting"); await h.settle();
+  assert.match(h.statuses.get("goal-loop"), /waiting for 2/);
+  h.tick(60_000); assert.equal(h.sent.length, 1);
+  await deliverChild(h, a); await assert.rejects(h.checkpoint(), /Consume/);
+  await h.checkpoint("waiting"); await h.settle(); assert.match(h.statuses.get("goal-loop"), /waiting for 1/);
+  await deliverChild(h, b); await h.checkpoint(); await h.settle();
+  assert.match(h.statuses.get("goal-loop"), /Loop 1\/5.*approval required/);
+  const query = { sessionId: "test", allowed: true }; h.bus.emit("simple-subagents:start-query:v1", query);
+  assert.equal(query.allowed, false); assert.equal(h.sent.length, 1);
+  await h.command("resume"); assert.equal(h.sent.length, 2); registerChild(h, "c");
+});
+
+test("status calls preserve the loop; only matching owned completion messages are accepted", { skip }, async t => {
+  const h = await harness(t); await h.command("goal");
+  await h.emit("tool_execution_start", { toolName: "subagent_status" });
+  await h.emit("tool_execution_end", { toolName: "subagent_status", isError: false });
+  const child = registerChild(h, "a"); await h.checkpoint("waiting"); await h.settle();
+  await deliverChild(h, { ...child, loopId: "different-loop" });
+  assert.equal(h.statuses.get("goal-loop"), undefined);
+  await deliverChild(h, child); await h.settle(); h.tick(60_000); assert.equal(h.sent.length, 1);
+});
+
+test("stopped loops ignore their late child result and do not restart", { skip }, async t => {
+  const h = await harness(t); await h.command("goal");
+  const child = registerChild(h, "a"); await h.checkpoint("waiting"); await h.settle();
+  await h.command("stop"); await deliverChild(h, child); await h.settle(); h.tick(60_000);
+  assert.equal(h.sent.length, 1); assert.equal(h.statuses.get("goal-loop"), undefined);
 });

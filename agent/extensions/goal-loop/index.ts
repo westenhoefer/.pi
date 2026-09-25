@@ -2,6 +2,8 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { stripVTControlCharacters } from "node:util";
+import { randomUUID } from "node:crypto";
+import { CHILD_STARTED, COMPLETION_TYPE, START_QUERY, type ChildStarted, type CompletionDetails, type StartQuery } from "../simple-subagents/contract.ts";
 import { GoalLoop, continuationPrompt, parseLoopStart } from "./loop.ts";
 import { ATTENTION_EVENT, type AttentionRequest } from "../notifications/contract.ts";
 
@@ -16,6 +18,8 @@ export default function goalLoopExtension(pi: ExtensionAPI): void {
   let starting = false;
   let countdownLeaf: string | null | undefined;
   let attentionKey = "";
+  let loopId: string | undefined;
+  let currentContext: ExtensionContext | undefined;
 
   function announceState(ctx: ExtensionContext): void {
     const state = loop.state;
@@ -45,7 +49,8 @@ export default function goalLoopExtension(pi: ExtensionAPI): void {
     }
     const suffix = state.phase === "countdown"
       ? ctx.ui.getEditorText().trim() ? "typing; countdown paused" : `next in ${Math.max(0, Math.ceil((state.due! - Date.now()) / 1000))}s`
-      : state.phase === "awaiting_approval" ? "approval required · /loop resume" : "working";
+      : state.phase === "awaiting_approval" ? "approval required · /loop resume"
+      : state.phase === "waiting_children" ? `waiting for ${loop.pendingChildren} child result(s)` : "working";
     ctx.ui.setStatus(TYPE, `Loop ${state.round}/${state.maxRounds} · ${suffix} · /loop stop`);
   }
 
@@ -98,6 +103,7 @@ export default function goalLoopExtension(pi: ExtensionAPI): void {
   pi.registerCommand("loop", {
     description: "Run /loop [--manual | --delay <seconds>] [--rounds <1–20>] <goal> (default 5 rounds; automatic mode 30m); /loop resume, status, or stop",
     async handler(args, ctx) {
+      currentContext = ctx;
       const command = args.trim();
       if (command === "stop") {
         stop("Stopped by user. In-flight work is not aborted; use Escape if needed.", ctx, true);
@@ -140,6 +146,7 @@ export default function goalLoopExtension(pi: ExtensionAPI): void {
       if (!approved || attempt !== generation || !ctx.isIdle() || ctx.hasPendingMessages()) return;
       sessionId = ctx.sessionManager.getSessionId();
       loop.start(goal, Date.now(), delayMs, manual, rounds);
+      loopId = randomUUID();
       attentionKey = "";
       pi.events.emit("goal-loop:started", { sessionId });
       timer = setInterval(() => tick(ctx), 1000);
@@ -152,7 +159,7 @@ export default function goalLoopExtension(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "loop_checkpoint",
     label: "Loop checkpoint",
-    description: "Report the current user-enabled /loop round's outcome. Cannot start, restart, or expand a loop. Call LAST in a chunk, not parallel with other tools. Continue requires new progress and an authorized next step; done/blocked/waiting/no_progress stop automatic continuation. Each text field is limited to 2000 characters.",
+    description: "Report the current user-enabled /loop round's outcome. Cannot start, restart, or expand a loop. Call LAST in a chunk, not parallel with other tools. Continue requires new progress and an authorized next step. Waiting suspends for this round's session-owned subagents; otherwise waiting/done/blocked/no_progress stop continuation. Each text field is limited to 2000 characters.",
     parameters: Type.Object({
       outcome: StringEnum(["continue", "done", "blocked", "waiting", "no_progress"] as const),
       progress: Type.String({ minLength: 1, maxLength: 2000, description: "New progress and verification evidence, or the blocker; never claim unrun checks passed." }),
@@ -162,7 +169,7 @@ export default function goalLoopExtension(pi: ExtensionAPI): void {
       if (signal?.aborted) throw new Error("Checkpoint cancelled.");
       loop.checkpoint(params);
       render(ctx);
-      return { content: [{ type: "text", text: `Loop checkpoint: ${params.outcome}. ${params.outcome === "continue" ? "Will evaluate continuation once Pi settles; manual mode requires user approval. Summarize this chunk now." : "Loop continuation stopped."}` }], details: { ...params } };
+      return { content: [{ type: "text", text: `Loop checkpoint: ${params.outcome}. ${params.outcome === "continue" ? "Will evaluate continuation once Pi settles; manual mode requires user approval. Summarize this chunk now." : params.outcome === "waiting" && loop.pendingChildren ? "Waiting for native child results within this same round. Summarize and yield." : "Loop continuation stopped."}` }], details: { ...params } };
     },
   });
 
@@ -188,7 +195,11 @@ export default function goalLoopExtension(pi: ExtensionAPI): void {
   pi.on("message_start", (event, ctx) => {
     const message = event.message;
     if (message.role === "user") { if (starting) generation++; loop.steer(); render(ctx); }
-    else if (message.role === "custom" && message.customType !== TYPE) stop("External message takes precedence.", ctx);
+    else if (message.role === "custom" && message.customType !== TYPE) {
+      const identity = message.details as CompletionDetails | undefined;
+      if (message.customType === COMPLETION_TYPE && identity?.sessionId === sessionId && identity.loopId === loopId && loop.childResult(identity.id)) render(ctx);
+      else stop("External message takes precedence.", ctx);
+    }
   });
   pi.on("tool_execution_start", (event, ctx) => {
     loop.toolStarted();
@@ -212,8 +223,27 @@ export default function goalLoopExtension(pi: ExtensionAPI): void {
   });
   pi.on("session_before_compact", (_event, ctx) => { stop("Compaction; restart explicitly after context recovery.", ctx); });
   pi.on("session_before_tree", (_event, ctx) => { stop("Session tree navigation.", ctx, true); });
-  pi.on("session_switch", (_event, ctx) => { stop("Session changed.", ctx, true); });
+  pi.on("session_start", (_event, ctx) => {
+    currentContext = ctx;
+    if (sessionId && sessionId !== ctx.sessionManager.getSessionId()) stop("Session changed.", ctx, true);
+  });
   pi.on("session_shutdown", (_event, ctx) => { stop("Session shutdown/reload.", ctx, true); });
+
+  pi.events.on(START_QUERY, (data) => {
+    const query = data as StartQuery;
+    if (!loop.state || loop.state.phase === "stopped" || query.sessionId !== sessionId) return;
+    if (loop.expired(Date.now()) || loop.state.phase !== "working") {
+      query.allowed = false;
+      query.reason = "No approved working loop round. Wait for /loop resume or the next automatic round; completion notices do not grant approval.";
+      if (currentContext) render(currentContext);
+    } else query.loopId = loopId;
+  });
+  pi.events.on(CHILD_STARTED, (data) => {
+    const child = data as ChildStarted;
+    if (child.sessionId !== sessionId || child.loopId !== loopId || !loopId) return;
+    loop.childStarted(child.id);
+    if (currentContext) render(currentContext);
+  });
 
   pi.events.on("goal-loop:query", (data) => {
     const query = data as { active?: boolean };

@@ -3,7 +3,7 @@ export type Outcome = "continue" | "done" | "blocked" | "waiting" | "no_progress
 export interface Checkpoint { outcome: Outcome; progress: string; next: string }
 export interface LoopState {
   goal: string;
-  phase: "working" | "countdown" | "awaiting_approval" | "stopped";
+  phase: "working" | "waiting_children" | "countdown" | "awaiting_approval" | "stopped";
   manual: boolean;
   round: number;
   maxRounds: number;
@@ -52,12 +52,28 @@ export function parseLoopStart(args: string): { goal: string; delayMs: number; m
 /** Session-local policy. The adapter owns the clock, UI, timers, and agent calls. */
 export class GoalLoop {
   state?: LoopState;
+  private children = new Set<string>();
+
+  get pendingChildren(): number { return this.children.size; }
+
+  childStarted(id: string): void {
+    if (this.state?.phase !== "working") throw new Error("Delegation requires a working loop round.");
+    this.children.add(id);
+    this.state.checkpoint = undefined;
+  }
+
+  childResult(id: string): boolean {
+    if (!this.state || this.state.phase === "stopped" || !this.children.delete(id)) return false;
+    this.steer();
+    return true;
+  }
 
   start(goal: string, now: number, delayMs: number = LIMITS.delayMs, manual = false, maxRounds: number = LIMITS.rounds): void {
     if (this.state && this.state.phase !== "stopped") throw new Error("A loop is already active; stop it first.");
     if (!goal.trim() || goal.length > 4000) throw new Error("Goal must contain 1–4000 characters.");
     if (!Number.isInteger(delayMs) || delayMs < 1000 || delayMs > 600_000) throw new Error("Delay must be 1–600 seconds.");
     if (!Number.isInteger(maxRounds) || maxRounds < 1 || maxRounds > LIMITS.maxRounds) throw new Error(`Rounds must be 1–${LIMITS.maxRounds}.`);
+    this.children.clear();
     this.state = { goal: goal.trim(), phase: "working", manual, round: 1, maxRounds,
       deadline: manual ? undefined : now + LIMITS.durationMs, delayMs, failures: 0 };
   }
@@ -75,8 +91,9 @@ export class GoalLoop {
     if (!["continue", "done", "blocked", "waiting", "no_progress"].includes(checkpoint.outcome)) throw new Error("Invalid checkpoint outcome.");
     if (!checkpoint.progress.trim() || checkpoint.progress.length > 2000 || checkpoint.next.length > 2000) throw new Error("Checkpoint requires a concise progress summary (up to 2000 characters per field).");
     if (checkpoint.outcome === "continue" && !checkpoint.next.trim()) throw new Error("Continuation requires a concrete next step.");
+    if (this.children.size && ["continue", "done"].includes(checkpoint.outcome)) throw new Error("Consume all delegated results before continuing/completing this round; use waiting at a dependency barrier.");
     state.checkpoint = { ...checkpoint, progress: checkpoint.progress.trim(), next: checkpoint.next.trim() };
-    if (checkpoint.outcome !== "continue") this.stop(`${checkpoint.outcome}: ${checkpoint.progress.trim()}`);
+    if (checkpoint.outcome !== "continue" && !(checkpoint.outcome === "waiting" && this.children.size)) this.stop(`${checkpoint.outcome}: ${checkpoint.progress.trim()}`);
   }
 
   steer(): void {
@@ -111,6 +128,11 @@ export class GoalLoop {
     if (this.expired(now)) return;
     const checkpoint = state.checkpoint;
     if (!checkpoint) return this.stop("No final checkpoint; not guessing whether more work is authorized.");
+    if (checkpoint.outcome === "waiting" && this.children.size) {
+      state.phase = "waiting_children";
+      state.due = undefined;
+      return;
+    }
     const progress = checkpoint.progress.toLowerCase().replace(/\s+/g, " ");
     if (progress === state.previousProgress) return this.stop("Repeated progress summary; no new progress confirmed.");
     state.previousProgress = progress;
@@ -155,7 +177,8 @@ export function continuationPrompt(state: LoopState): string {
     "At the end of the chunk, call loop_checkpoint as your LAST tool call, then give a brief user-facing summary.",
     "Report outcome=continue only with concrete NEW progress, verification results (or honestly not run), and a specific authorized next step.",
     "Report done when the goal is met; blocked when approval/information is needed; waiting for background work; no_progress if stuck. Do not manufacture more work.",
-    "Do not poll or sleep to sustain this loop. Background launches suspend automatic continuation; follow their native notification protocol.",
+    "Session-owned subagent_start children belong to THIS round. At a dependency barrier use waiting: the loop suspends until native child results arrive. Consume every result before continue/done. Completion wakes do not approve a new round or refresh budgets.",
+    "Do not poll or sleep to sustain this loop. Other background launchers stop automatic continuation; follow their native notification protocol.",
     "If you stop without a final checkpoint, the loop stops safely.",
     state.manual
       ? "Manual approval mode: after this chunk, stop. Only the user's /loop resume approves another round; never request, simulate, or invoke approval yourself."
