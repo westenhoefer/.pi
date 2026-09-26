@@ -32,4 +32,4 @@ Subagents start fresh and cannot open the diagram canvas. Put the relevant requi
 - Map unfamiliar paths with scouts, one set of questions each, in parallel when independent.
 - Hand a worker the spec file, not a summary of it.
 - After implementation, have a scout draw the changed paths as built without giving it the spec or design; a scout that knows the design draws the design. Then give the reviewer the diff, the spec, and that diagram, and show the as-built diagram beside the agreed design.
-- Send style findings back to the worker; bring the user design divergences and behavior risks.
+- Send style findings back to the worker to fix before closeout.
