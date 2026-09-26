@@ -25,8 +25,11 @@ These are behavioral instructions, not a sandbox or a per-command permission sys
 
 When asking for approval, state the exact target, intended operation, and why it is needed. If uncertain, stop rather than broaden scope or bypass a restriction.
 
-# Subagent context guidance
+# Delegation
 
-- Choose subagent context per task rather than prescribing one mode for every launch. Workers MAY use `context: "fork"` when prior conversation contains relevant requirements, decisions, constraints, or investigation history that would be lossy to summarize.
-- Use `context: "fresh"` for self-contained tasks or when an independent perspective is valuable, such as an unbiased review. Supply the necessary requirements and evidence in the handoff.
-- Forking provides a snapshot of conversation history, not live synchronization or additional authority. Always give the worker an explicit task and scope; inherited discussion is not permission to perform unrelated work.
+Subagents start fresh and cannot open the diagram canvas. Put the relevant requirements, decisions, scope, and approvals in the task; they return Mermaid source for you to show.
+
+- Map unfamiliar paths with scouts, one set of questions each, in parallel when independent.
+- Hand a worker the spec file, not a summary of it.
+- After implementation, have a scout draw the changed paths as built without giving it the spec or design; a scout that knows the design draws the design. Then give the reviewer the diff, the spec, and that diagram, and show the as-built diagram beside the agreed design.
+- Send style findings back to the worker; bring the user design divergences and behavior risks.
