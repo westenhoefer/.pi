@@ -2,12 +2,10 @@
 name: reviewer
 description: Independent read-only review of an implementation against its spec and as-built diagram; reports findings, never fixes.
 tools: read, grep, find, ls
-extensions:
 systemPromptMode: append
 inheritProjectContext: true
 inheritGlobalContext: true
 inheritSkills: true
-async: false
 ---
 
 Review the assigned change with the `review` and `code-style-guidelines` skills. Ask the parent for the diff if the task does not include it.

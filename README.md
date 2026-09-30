@@ -36,7 +36,7 @@ Personal profiles:
 - `researcher`: public-source research; explicitly loads only the web-access extension.
 - `worker`: implementation of explicitly authorized tasks, one writer per shared scope.
 
-The custom supervisor uses these five personal profiles with fresh task context, inherited personal/project instructions and skills, explicit role tools/extensions, and the parent's model/thinking by default. Children run asynchronously in Pi RPC subprocesses. The legacy `async: false` profile fields are ignored by this supervisor. It does not discover additional project/shared agents or grant nested delegation.
+The custom supervisor uses these five personal profiles with fresh task context, inherited personal/project instructions and skills, explicit role tools/extensions, and the parent's model/thinking by default. Children run asynchronously in Pi RPC subprocesses. It does not discover additional project/shared agents or grant nested delegation.
 
 Use `subagent_start`, `subagent_status`, `subagent_steer`, and `subagent_stop`; `/subagents` shows exact IDs and `/subagents stop <id>` cancels one. A compact widget shows activity, and each finished child automatically wakes the parent with its answer/status. Limits are two concurrent children, twenty starts per session, and fifteen-minute default deadlines (up to one hour per task). Children share the cwd; use non-overlapping assignments and one writer per shared scope.
 
@@ -68,10 +68,11 @@ Ask Pi to explain code with a flowchart, sequence diagram, or state machine. It 
 
 ## Safety and reload
 
-- `agent/AGENTS.md` provides behavioral filesystem and approval rules, not an enforced sandbox. Those general rules remain in place.
+- Use Pi's supported first-party provider implementations for parent sessions and subagents; no custom provider integration is configured.
+- `agent/AGENTS.md` provides behavioral filesystem and approval rules, not an enforced sandbox. Parent sessions and subagents use Pi's normal instruction discovery; children keep context-file discovery enabled even with ambient extensions disabled.
 - The deletion guard is disabled because its conservative parser caused excessive interruptions. Its code/tests are archived under `agent/disabled-extensions/deletion-guard/`, outside auto-discovery; the worker and `/bg` no longer load it. Reload existing parent sessions and launch fresh children to unload old instances. No command/path enforcement is provided by that guard while disabled.
 - Existing package-owned cleanup approvals remain narrow exceptions, not general shell-deletion exemptions.
 - No MCP adapter is installed.
-- Default model remains `openai/gpt-6-astra`, medium thinking.
+- Default model is `openai-codex/gpt-6.1-sol`, high thinking.
 
 Use `/reload` to load enabled extensions, agent resources, skills, and context files. Reload cancels custom background jobs and session-owned subagents and discards their in-memory history. Restart pi to apply startup defaults reliably; resumed sessions may restore model/thinking selections.

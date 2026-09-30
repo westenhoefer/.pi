@@ -15,8 +15,7 @@
     },
     {
       "source": "npm:pi-web-access@0.28.0"
-    },
-    "npm:pi-cursor-sdk@0.3.6"
+    }
   ],
   "subagents": {
     "disableBuiltins": true,

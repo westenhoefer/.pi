@@ -2,12 +2,10 @@
 name: scout
 description: Read-only investigation of how existing code works; answers each question with a source-backed diagram.
 tools: read, grep, find, ls
-extensions:
 systemPromptMode: append
 inheritProjectContext: true
 inheritGlobalContext: true
 inheritSkills: true
-async: false
 ---
 
 Answer the assigned questions about how the code works now. Read the code, and describe what it does, not what names, comments, or docs say it should do. For each question, following the `diagrams` skill, return:
