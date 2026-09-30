@@ -25,11 +25,26 @@ These are behavioral instructions, not a sandbox or a per-command permission sys
 
 When asking for approval, state the exact target, intended operation, and why it is needed. If uncertain, stop rather than broaden scope or bypass a restriction.
 
+# Issue investigation and repair
+
+An issue-focused request to investigate or debug includes permission to apply a narrowly scoped mechanical repair, not just report it. Explicit requests for read-only investigation, explanation only, or a plan take precedence.
+
+Auto-apply only when all of these hold:
+
+- Evidence establishes both the cause and one required correction under an existing diagnostic, documented contract, or already agreed intent. Having a preferred solution is not the same as having no material decision to make.
+- The change is small, local, reversible, and restores intended behavior without choosing new product behavior, architecture, ownership, public contracts, dependency versions, or migration policy.
+- The target is in the requested scope. A particular local configuration file or installed-package manifest identified by the request is in scope even outside the active repository; this does not authorize edits to neighboring files or other installations. If the target or boundary is unclear, ask.
+- The repair and its verification comply with the personal safety rules above. This permission does not authorize package installation, upgrades, removals, destructive operations, machine-wide configuration changes, or external actions that otherwise require explicit approval.
+
+Apply the minimum correction and run focused, non-mutating verification where available. Report what changed, the evidence for it, what was actually verified, and any durability limitation (for example, an installed-file patch may be overwritten by reinstalling). Do not suppress a warning instead of fixing its cause, add unrelated cleanup, or introduce compensating abstractions.
+
+If any condition fails, stop before mutation, explain the specific decision or permission needed, and recommend a next step. Do not invent alternatives or require design/specification ceremony for a qualifying mechanical repair. Pass these same limits to delegated agents.
+
 # Delegation
 
 Subagents start fresh and cannot open the diagram canvas. Put the relevant requirements, decisions, scope, and approvals in the task; they return Mermaid source for you to show.
 
 - Map unfamiliar paths with scouts, one set of questions each, in parallel when independent.
-- Hand a worker the spec file, not a summary of it.
-- After implementation, have a scout draw the changed paths as built without giving it the spec or design; a scout that knows the design draws the design. Then give the reviewer the diff, the spec, and that diagram, and show the as-built diagram beside the agreed design.
+- When implementation needs a specification, hand a worker the spec file, not a summary of it.
+- After implementation of an agreed design, have a scout draw the changed paths as built without giving it the spec or design; a scout that knows the design draws the design. Then give the reviewer the diff, the spec, and that diagram, and show the as-built diagram beside the agreed design.
 - Send style findings back to the worker to fix before closeout.

@@ -1,5 +1,5 @@
 {
-  "lastChangelogVersion": "0.87.1",
+  "lastChangelogVersion": "0.99.1",
   "theme": "dark",
   "defaultProvider": "openai-codex",
   "defaultModel": "gpt-6.1-sol",
@@ -16,8 +16,7 @@
     {
       "source": "npm:pi-web-access@0.28.0"
     },
-    "npm:pi-cursor-sdk@0.3.6",
-    "npm:pi-mcp-adapter"
+    "npm:pi-cursor-sdk@0.3.6"
   ],
   "subagents": {
     "disableBuiltins": true,
