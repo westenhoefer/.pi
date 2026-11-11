@@ -1,74 +1,14 @@
-# Opt-in desktop notifications
+# Desktop notifications (disabled)
 
-Auto-discovered on `/reload`. No dependency installation, registry edits, or machine configuration changes are required. Reload cancels existing subscriptions and resets agent-notification permission to disabled; it also cancels this repository's background jobs and subagents.
+Disabled by the exact extension exclusion in `agent/settings.json`. Source and tests are retained for reversibility; no packages were removed.
 
-```text
-/notify enable
-/notify disable
-/notify Fix the parser bug and verify the regression
-/notify status
-/notify off
-/notify test
-/notify -- status
+Reload existing Pi sessions to unload the command, notification tools and injected agent instructions. Reload also stops session-owned background jobs and subagents. The goal-loop adapter's attention events have no desktop delivery while this extension is disabled.
 
-/loop --manual Fix the parser bug and verify the regression
-/loop resume
-/loop stop
-```
+Switchboard replaces this channel. Communication policy lives in the shared `development-workflow` skill; availability, delivery and reply handling live in the `agent-tools` Switchboard reference. Agents send significant progress/input-needed updates and a completion notice whenever Switchboard is available, with chat as the fallback. Notices never approve additional work or resume a manual loop.
 
-## Session permission (including mid-loop)
-
-`/notify enable` permits the agent to use `notify_send` for the **current TUI session**, without arming or starting a task. It works while Pi is busy, while children run, and during automatic or manual goal loops. The agent may send a requested alert, meaningful milestone, completion, or input-needed notice—not a toast for every tool call. Enabling alone sends no desktop alert and starts no model turn.
-
-`notify_send({ kind: "update" | "done" | "needs_input" })` sends one fixed generic notification immediately. It does not wait for settlement, arm a task, append a custom conversation message, or advance/approve a loop. **During a loop, call it before the final `loop_checkpoint`.** Use `update` for intermediate milestones, and `done` only for genuinely completed work. For an explicitly armed `/notify <task>`, use its existing checkpoint flow instead of duplicate direct alerts.
-
-`/notify disable` revokes session permission and cancels any task subscription, without aborting work. Already submitted/in-flight desktop notifications cannot be recalled. Existing manual-loop approval/completion alerts remain separate and unchanged. A later explicit `/notify <task>` can still authorize one task's alerts without enabling general session permission.
-
-Permission defaults to disabled and is never persisted, inherited by children, or model-armable. It survives same-session compaction, tree navigation, task completion, and loop start/stop; reload, shutdown or session replacement clears it. `/notify status` reports permission and task-subscription state independently. `/notify off` retains its original narrower meaning: cancel the task subscription, not session permission. Use `/notify -- enable` or `/notify -- disable` when those words are the task itself.
-
-## Task and loop behavior
-
-- `/notify <task>` sends the task as a normal user message and arms a session-local notification subscription. Start while Pi is idle. Ordinary tasks remain silent unless session permission is enabled and the agent explicitly sends an alert.
-- The agent calls `notify_checkpoint` as its **last tool call**, then summarizes. `done` sends one completion notice after Pi settles and clears the subscription. `needs_input` sends an attention notice and keeps it armed for the user's reply. `waiting` keeps it armed **without** notifying.
-- Merely becoming idle, launching a job/subagent, or receiving a background result is **not completion**. Background/delegated results must be consumed before the agent reports `done`. Completion is a **model attestation**, not independently verified process/task tracking. A missing or stale checkpoint sends no completion notice; the footer continues to show the subscription as armed.
-- Blocking extension UI prompts also send an input-needed notice. Repeated prompts and a matching `needs_input` checkpoint are deduplicated until normal user input. A final error/abort sends an interruption notice and clears the subscription; intermediate errors that Pi successfully retries do not produce a false failure notice.
-- `/notify off` cancels only the task notification subscription, not running work. `/notify status` reports it. `/notify test` sends a fixed test attention notice, without arming a task or invoking the model. Use `--` to escape reserved command words.
-- Only one task subscription is active at a time. Replies/steering belong to the armed task until completion or `/notify off`; the extension cannot infer when an unrelated task has replaced it. Cancel explicitly when abandoning a task.
-- Manual loops send an approval notice once per iteration, plus completion/stopped notices. `/loop resume` approves **one** next iteration. Approval takes place in Pi, never through a toast. Automatic loops produce no automatic desktop alerts; an agent may explicitly call `notify_send` when session permission is enabled.
-- Do not nest slash commands in `/notify`. Starting `/notify <task>` during an active loop is rejected; `/notify enable|disable` and `notify_send` are compatible with loops. Starting a loop cancels any prior task subscription so the two checkpoint contracts never compete.
-- Reload, shutdown, tree navigation, and session replacement cancel task subscriptions. Nothing is persisted or restored. Task subscriptions survive compaction in the same session and re-inject their checkpoint instructions on the next run.
-
-## Delivery and privacy
-
-Only fixed generic statuses are sent to the desktop: no goal, code, command, path, or model-generated text. Notifications are alerts, not additional permissions. They do not wake the agent, append custom conversation entries, click buttons, or execute task content.
-
-Backends:
-
-- **Windows:** native toast through `powershell.exe`, including terminals without `WT_SESSION`. Requests the `Microsoft.WindowsPowerShell` notification identity, which may not appear in Windows' app notification list until a toast has been successfully delivered. The script is encoded, non-interactive, bounded to five seconds, and does not change execution policy, register an application, or install anything.
-- **Windows Terminal under WSL:** uses `powershell.exe` through Windows interop when `WT_SESSION` is present.
-- **Kitty:** OSC 99.
-- **Ghostty, iTerm2, WezTerm, rxvt-unicode:** OSC 777.
-- Other terminals: an in-Pi warning rather than claiming desktop delivery.
-
-TUI only; no desktop alerts are emitted from RPC, JSON, print, or headless workers. Each desktop attempt also displays an in-Pi status notice. Backend errors produce a bounded diagnostic warning (including PowerShell's stderr when available) without retry loops or starting more model work. Windows Focus Assist/Do Not Disturb and terminal/OS notification settings may suppress a successfully submitted notification; submission does not prove it was displayed. Use `/notify test` to verify your actual desktop setup.
-
-## Ownership and integration
-
-`task.ts` owns the one-task subscription and checkpoint policy. `desktop.ts` owns fixed-message backend requests and delivery. `index.ts` owns session permission, Pi commands, tools, lifecycle, and event handling. Session permission uses an exact session-ID guard. Enabled-agent guidance augments the system prompt rather than adding a custom message that would disarm goal-loop. `contract.ts` defines the narrow `pi:attention` event: `{ sessionId, kind }`, with an allowlisted status kind and no task text.
-
-The goal-loop adapter emits attention requests after settlement (or when a UI decision interrupts work). The notification extension owns desktop delivery. The synchronous `goal-loop:query` event fills an `active` boolean for command exclusion; `goal-loop:started` cancels an old task subscription. Neither event grants permission to start or resume a loop.
-
-## Verification
-
-From the `~/.pi` repository:
+The retained tests can still be run offline without sending desktop notifications:
 
 ```bash
-node --test agent/extensions/goal-loop/test/*.test.mjs agent/extensions/notifications/test/*.test.mjs
-
 PI_TEST_PACKAGE_DIR='C:/Users/johan/AppData/Roaming/nvm/v26.8.1/node_modules/@earendil-works/pi-coding-agent' \
-PI_OFFLINE=1 node --test agent/extensions/goal-loop/test/*.test.mjs agent/extensions/notifications/test/*.test.mjs
+PI_OFFLINE=1 node --test agent/extensions/notifications/test/*.test.mjs
 ```
-
-Without `PI_TEST_PACKAGE_DIR`, SDK integration tests explicitly skip. Policy tests use the installed Node's TypeScript support. Integration tests load both extensions through the real Pi loader, with simulated lifecycle/UI/clock and injected notification delivery. They never send real desktop notifications, launch PowerShell, or call a model. Production registration and encoded backend requests are checked separately.
-
-Manual smoke test after reload: run `/notify test`, a small read-only `/notify` task, then a small `/loop --manual` task. During the loop use `/notify enable`, ask the agent to notify you with `notify_send`, then use `/notify disable` and verify subsequent direct sends are rejected. Verify approval stays paused until `/loop resume`, `/loop stop` prevents continuation, and real Windows toast delivery works. Automated tests are not an end-to-end desktop or live-model verification.

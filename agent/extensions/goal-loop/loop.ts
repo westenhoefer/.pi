@@ -53,6 +53,8 @@ export function parseLoopStart(args: string): { goal: string; delayMs: number; m
 export class GoalLoop {
   state?: LoopState;
   private children = new Set<string>();
+  private onStop: (reason: string) => void;
+  constructor(onStop: (reason: string) => void = () => {}) { this.onStop = onStop; }
 
   get pendingChildren(): number { return this.children.size; }
 
@@ -83,6 +85,7 @@ export class GoalLoop {
     this.state.phase = "stopped";
     this.state.reason = reason;
     this.state.due = undefined;
+    this.onStop(reason);
   }
 
   checkpoint(checkpoint: Checkpoint): void {
@@ -177,7 +180,7 @@ export function continuationPrompt(state: LoopState): string {
     "At the end of the chunk, call loop_checkpoint as your LAST tool call, then give a brief user-facing summary.",
     "Report outcome=continue only with concrete NEW progress, verification results (or honestly not run), and a specific authorized next step.",
     "Report done when the goal is met; blocked when approval/information is needed; waiting for background work; no_progress if stuck. Do not manufacture more work.",
-    "Session-owned subagent_start children belong to THIS round. At a dependency barrier use waiting: the loop suspends until native child results arrive. Consume every result before continue/done. Completion wakes do not approve a new round or refresh budgets.",
+    "Session-owned subagent_start children and complete swarm_start batches (queued and active) belong to THIS round. At a dependency barrier use waiting: the loop suspends until native child results arrive. Consume every result before continue/done. Completion wakes do not approve a new round or refresh budgets.",
     "Do not poll or sleep to sustain this loop. Other background launchers stop automatic continuation; follow their native notification protocol.",
     "If you stop without a final checkpoint, the loop stops safely.",
     state.manual

@@ -2,12 +2,14 @@ import { readFile } from "node:fs/promises";
 import { basename, isAbsolute, join, resolve } from "node:path";
 import type { Launch } from "./rpc.ts";
 
-export const ROLES = ["worker", "scout", "reviewer", "oracle", "researcher"] as const;
+export const ROLES = ["worker", "scout", "reviewer"] as const;
+export const ADDITIONAL_TOOLS = ["read", "grep", "find", "ls", "edit", "write", "bash", "powershell"] as const;
 export interface Profile { name: string; prompt: string; tools: string[]; extensions: string[]; model?: string }
 type Parser = (text: string) => { frontmatter: Record<string, unknown>; body: string };
 
-export async function loadProfile(agentDir: string, name: string, parse: Parser): Promise<Profile> {
+export async function loadProfile(agentDir: string, name: string, parse: Parser, additionalTools: string[] = []): Promise<Profile> {
   if (!(ROLES as readonly string[]).includes(name)) throw new Error(`Unknown role. Choose ${ROLES.join(", ")}.`);
+  if (!Array.isArray(additionalTools) || additionalTools.some(tool => !(ADDITIONAL_TOOLS as readonly string[]).includes(tool))) throw new Error(`additionalTools must contain only built-in leaf tools: ${ADDITIONAL_TOOLS.join(", ")}.`);
   const directory = join(agentDir, "agents");
   const { frontmatter: fields, body } = parse(await readFile(join(directory, `${name}.md`), "utf8"));
   for (const key of ["inheritProjectContext", "inheritGlobalContext", "inheritSkills"]) {
@@ -21,9 +23,9 @@ export async function loadProfile(agentDir: string, name: string, parse: Parser)
     throw new Error(`${name}: expected a comma-separated list or string array.`);
   };
   const tools = list(fields.tools);
-  if (!tools.length || tools.some(tool => /subagent|job_start|loop_checkpoint|bg_wait/.test(tool))) throw new Error(`${name}: explicit leaf-only tools are required.`);
+  if (!tools.length || tools.some(tool => /subagent|swarm_|job_start|loop_checkpoint|bg_wait/.test(tool))) throw new Error(`${name}: explicit leaf-only tools are required.`);
   return {
-    name, prompt: body, tools,
+    name, prompt: body, tools: [...new Set([...tools, ...additionalTools])],
     extensions: list(fields.extensions).map(path => isAbsolute(path) ? path : resolve(directory, path)),
     model: typeof fields.model === "string" ? fields.model : undefined,
   };

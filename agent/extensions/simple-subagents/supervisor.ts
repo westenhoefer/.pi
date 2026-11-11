@@ -3,18 +3,19 @@ import { stripVTControlCharacters } from "node:util";
 import type { ChildIdentity } from "./contract.ts";
 import type { ChildTransport, Connect, Launch, RpcRecord } from "./rpc.ts";
 
+export interface ChildUsage { input: number; output: number; cacheRead: number; cacheWrite: number; totalTokens: number; cost?: number }
 export type ChildState = "starting" | "running" | "stopping" | "succeeded" | "failed" | "blocked" | "cancelled" | "timed_out";
 export interface ChildSnapshot extends ChildIdentity {
-  agent: string; task: string; state: ChildState; activity: string; output: string;
-  error?: string; startedAt: number; endedAt?: number;
+  agent: string; task: string; state: ChildState; activity: string; output: string; outputTruncated: boolean;
+  error?: string; startedAt: number; endedAt?: number; swarmId?: string; taskId?: string; usage?: ChildUsage;
 }
-export interface StartInput { agent: string; task: string; launch: Launch; loopId?: string; timeoutSeconds?: number }
+export interface StartInput { agent: string; task: string; launch: Launch; loopId?: string; timeoutSeconds?: number; swarmId?: string; taskId?: string }
 interface Child {
   snapshot: ChildSnapshot; transport?: ChildTransport; timer?: ReturnType<typeof setTimeout>;
   finishing?: Promise<void>; lastStopReason?: string; lastError?: string;
 }
 export interface SupervisorOptions {
-  sessionId: string; connect: Connect;
+  sessionId: string; connect: Connect; maxConcurrency?: number; configurationError?: string;
   onStarted: (child: ChildSnapshot) => void;
   onChange: (children: ChildSnapshot[]) => void;
   onComplete: (child: ChildSnapshot) => void;
@@ -35,21 +36,29 @@ export class Supervisor {
   list(): ChildSnapshot[] { return [...this.children.values()].map(child => ({ ...child.snapshot })); }
   status(id: string): ChildSnapshot { return { ...this.get(id).snapshot }; }
 
+  get capacity(): number {
+    if (this.closed || this.options.configurationError || this.list().some(child => child.state === "stopping" && child.error)) return 0;
+    return Math.max(0, (this.options.maxConcurrency ?? 5) - this.list().filter(active).length);
+  }
+
   start(input: StartInput): ChildSnapshot {
     if (this.closed) throw new Error("Subagent session is shutting down.");
+    if (this.options.configurationError) throw new Error(this.options.configurationError);
     if (this.list().some(child => child.state === "stopping" && child.error)) throw new Error("Resolve unconfirmed child termination before launching more work.");
-    if (this.list().filter(active).length >= 2) throw new Error("Two children are already active. Wait for completion or stop one.");
-    if (this.children.size >= 20) throw new Error("Twenty-child session limit reached. Start a new parent session for more work.");
+    if (!this.capacity) throw new Error(`Concurrency ceiling (${this.options.maxConcurrency ?? 5}) reached. Wait for completion or stop a child.`);
     if (!input.task.trim() || input.task.length > 16_000) throw new Error("Task must contain 1–16000 characters.");
     const timeout = input.timeoutSeconds ?? 900;
     if (!Number.isInteger(timeout) || timeout < 1 || timeout > 3600) throw new Error("Timeout must be 1–3600 seconds.");
     const child: Child = { snapshot: {
       id: randomUUID(), sessionId: this.options.sessionId, loopId: input.loopId,
-      agent: input.agent, task: input.task, state: "starting", activity: "starting", output: "", startedAt: Date.now(),
+      agent: input.agent, task: input.task, swarmId: input.swarmId, taskId: input.taskId,
+      state: "starting", activity: "starting", output: "", outputTruncated: false, startedAt: Date.now(),
     } };
     this.children.set(child.snapshot.id, child);
     try { this.options.onStarted({ ...child.snapshot }); }
     catch (error) { this.children.delete(child.snapshot.id); throw error; }
+    const finished = this.list().filter(item => !item.swarmId && !active(item));
+    for (const old of finished.slice(0, Math.max(0, finished.length - 20))) this.children.delete(old.id);
     this.publish();
     child.timer = setTimeout(() => { void this.finish(child, "timed_out", "Child deadline exhausted."); }, timeout * 1000);
     // Run after returning the ID, so completion cannot precede launch registration.
@@ -70,6 +79,11 @@ export class Supervisor {
     const child = this.get(id);
     if (active(child.snapshot)) await this.finish(child, "cancelled", "Stopped explicitly by the parent.");
     return { ...child.snapshot };
+  }
+
+  forget(id: string): void {
+    if (active(this.get(id).snapshot)) throw new Error("Cannot forget an active child.");
+    this.children.delete(id);
   }
 
   async shutdown(): Promise<ChildSnapshot[]> {
@@ -99,6 +113,13 @@ export class Supervisor {
 
   private event(child: Child, event: RpcRecord): void {
     if (child.finishing || this.closed) return;
+    if (event.type === "message_end" && event.message?.usage) {
+      const source = event.message.usage;
+      const usage = child.snapshot.usage ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: 0 };
+      for (const key of ["input", "output", "cacheRead", "cacheWrite", "totalTokens"] as const) usage[key] += Number.isFinite(source[key]) ? source[key] : 0;
+      usage.cost = usage.cost !== undefined && Number.isFinite(source.cost?.total) ? usage.cost + source.cost.total : undefined;
+      child.snapshot.usage = usage;
+    }
     if (event.type === "extension_ui_request" && ["confirm", "select", "input", "editor"].includes(event.method)) {
       void this.finish(child, "blocked", `Child requested human input (${event.method}): ${clean(String(event.title ?? "Approval required"), 500)}. Resolve explicitly and launch a new task.`);
     } else if (event.type === "extension_error") {
@@ -113,7 +134,9 @@ export class Supervisor {
       child.snapshot.activity = event.type === "auto_retry_start" ? "retrying provider" : "compacting";
       this.publish();
     } else if (event.type === "message_end" && event.message?.role === "assistant") {
-      child.snapshot.output = clean((event.message.content ?? []).filter((part: { type: string }) => part.type === "text").map((part: { text: string }) => part.text).join("\n"));
+      const output = clean((event.message.content ?? []).filter((part: { type: string }) => part.type === "text").map((part: { text: string }) => part.text).join("\n"), Infinity);
+      child.snapshot.outputTruncated = output.length > 16_000;
+      child.snapshot.output = clean(output);
       child.lastStopReason = event.message.stopReason;
       child.lastError = event.message.errorMessage;
     } else if (event.type === "agent_settled") {

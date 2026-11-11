@@ -41,3 +41,16 @@ test("missing checkpoint still fails closed after delegation", () => {
   const loop = start(); loop.childStarted("a"); loop.settled(1);
   assert.equal(loop.state.phase, "stopped"); assert.equal(loop.childResult("a"), false);
 });
+
+test("all policy stop paths revoke owned-run admission exactly once", () => {
+  for (const cause of ["explicit", "checkpoint", "settled", "failures", "expiry"]) {
+    const revoked = [];
+    const loop = new GoalLoop(reason => revoked.push(reason)); loop.start("Goal", 0);
+    if (cause === "explicit") loop.stop("user stop");
+    if (cause === "checkpoint") loop.checkpoint({ outcome: "blocked", progress: "Needs user input", next: "" });
+    if (cause === "settled") loop.settled(1);
+    if (cause === "failures") { loop.toolEnded(true); loop.toolEnded(true); }
+    if (cause === "expiry") loop.expired(LIMITS.durationMs);
+    loop.stop("duplicate"); assert.equal(revoked.length, 1, cause); assert.equal(loop.state.phase, "stopped");
+  }
+});

@@ -6,7 +6,7 @@ const launch = { command: "unused", args: [], cwd: ".", env: {} };
 const tick = () => new Promise(resolve => setImmediate(resolve));
 function harness(options = {}) {
   const connections = [], completed = [], started = [];
-  const supervisor = new Supervisor({ sessionId: "parent", onStarted: child => started.push(child), onChange() {}, onComplete: child => completed.push(child),
+  const supervisor = new Supervisor({ sessionId: "parent", onStarted: child => started.push(child), onChange() {}, onComplete: child => completed.push(child), maxConcurrency: 2,
     connect(_launch, event, exit) {
       const child = { event, exit, requests: [], closed: false,
         async request(request) { child.requests.push(request); return options.request ? options.request(request) : { type: "response", success: true }; },
@@ -27,7 +27,7 @@ test("parallel children return IDs immediately, complete individually once, and 
   const h = harness(); t.after(() => h.supervisor.shutdown());
   const first = h.start(), second = h.start("Review tests");
   assert.notEqual(first.id, second.id); assert.equal(h.connections.length, 0);
-  assert.throws(() => h.start(), /Two children/);
+  assert.throws(() => h.start(), /Concurrency ceiling/);
   await tick(); h.finish(1, "Second answer"); await tick();
   assert.equal(h.completed.length, 1); assert.equal(h.completed[0].id, second.id);
   assert.equal(h.supervisor.status(first.id).state, "running");

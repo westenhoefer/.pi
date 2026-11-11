@@ -40,15 +40,19 @@ Apply the minimum correction and run focused, non-mutating verification where av
 
 If any condition fails, stop before mutation, explain the specific decision or permission needed, and recommend a next step. Do not invent alternatives. Pass these same limits to delegated agents.
 
-# Workflow
+# Communication
 
-Each step guards against one risk. Take a step only when its risk is present; the full sequence is not the default.
+At significant progress, human-input boundaries, and task completion, follow the `development-workflow` skill's Communication guidance and the `agent-tools` Switchboard protocol. Treat its completion notice as part of finishing: a chat summary alone is not sufficient when Switchboard is available, because the user may be waiting elsewhere.
 
-- Work the design out on diagrams with `architecture-design` when the request leaves a decision open: ownership, contracts, public behavior, persistence, or migration. A lookup, a known edit, or a qualifying mechanical repair leaves none; implement it directly.
-- Add the agreed decisions, if any, to the corresponding Linear ticket; that is the design record. Without a Linear tool, give the user the text to add.
-- Write a spec with `create-specification` only when a fresh implementer builds the design: a worker, a new session, or another tool. Hand the worker the spec file, not a summary.
-- When a worker built an agreed design, have a scout that has not seen the design draw the changed paths as built. Give the reviewer the diff, the spec, and that diagram, and show the as-built diagram beside the agreed design. Send style findings back to the worker to fix before closeout.
+# Universal principles
 
-Do not add a step whose risk is absent because the change feels large or important.
+Make every addition earn its place. Prefer the smallest complete solution, and spend reasoning on reducing unnecessary substance—not necessary guarantees.
 
-Subagents start fresh and cannot open the diagram canvas. Put the relevant requirements, decisions, scope, and approvals in the task; they return Mermaid source for you to show. Map unfamiliar paths with scouts, one set of questions each, in parallel when independent.
+Existing complexity is evidence, not authority. Do not preserve assumed constraints solely because previous code or agents did.
+
+# Copy-pasteable terminal commands
+
+- Emit valid shell source in standalone snippets, without prompts, line numbers, or presentation-only indentation. Preserve meaningful indentation in YAML/scripts; heredoc closing markers must start at column 1 and match exactly, with no trailing whitespace.
+- Multiline commands and heredocs are allowed. Do not force single-line commands or create separate files merely to avoid multiline formatting.
+- These rules govern generated source, not Pi's rendered margins. Display padding is controlled by Pi settings; do not claim the agent can remove it or alter valid command syntax to compensate for it.
+- Match the user's actual interactive shell and state the required working directory. Do not assume Pi's Bash tool shell is also the shell the user will paste into.

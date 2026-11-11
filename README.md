@@ -2,7 +2,7 @@
 
 Remote: `git@github.com:westenhoefer/.pi.git`
 
-This repository tracks selected personal settings, instructions, agent profiles, and extensions. Shared skills remain in the separate `~/.agents` repository.
+This repository tracks selected personal settings, instructions, agent profiles, extensions, and Pi-specific skills under `agent/skills/`. Cross-tool skills remain in the separate `~/.agents` repository.
 
 The `.gitignore` is allowlist-based. Authentication, model stores, sessions, caches, package installs, trust decisions, and backups are not tracked. Review `git status --short --untracked-files=all` and the staged diff before committing; allowed configuration files can still contain sensitive values.
 
@@ -14,9 +14,10 @@ The `.gitignore` is allowlist-based. Authentication, model stores, sessions, cac
 | Session-owned subagents | `agent/extensions/simple-subagents/`, `agent/agents/` | Auto-discovered on `/reload`; parallel RPC children, steering, completion wakes, goal-loop coordination |
 | `pi-subagents@0.66.0` | `agent/extensions/subagent/config.json`, `agent/settings.json` | Retained but all package resources disabled; legacy configuration preserved |
 | Custom background jobs | `agent/extensions/background-jobs/` | Auto-discovered on `/reload` |
+| Chat snapshot viewer | `agent/extensions/chat-view/` | Auto-discovered on `/reload`; `/chat-view` opens saved user/assistant text without thinking or tools |
 | Bounded goal loop | `agent/extensions/goal-loop/` | Auto-discovered on `/reload`; `/loop [--manual \| --delay <seconds>] [--rounds <1–20>] <goal>` |
-| Opt-in notifications | `agent/extensions/notifications/` | Auto-discovered on `/reload`; `/notify enable\|disable`, task subscriptions, and manual-loop approval alerts |
-| Local diagram canvas | `agent/extensions/diagram-canvas/` | Auto-discovered on `/reload`; pinned local Mermaid, browser canvas via `/canvas` |
+| Desktop notifications | `agent/extensions/notifications/` | Disabled in `agent/settings.json`; source/tests retained, Switchboard replaces desktop alerts |
+| MCP Browser | `agent/mcp.json` → `mcp-browser` | Shared browser, persisted Mermaid diagrams, and Switchboard; namespaced tools through `codemode` |
 
 Packages are pinned in `agent/settings.json`, installed under `agent/npm/`, with dependency lifecycle scripts disabled for this installation. No global npm packages were changed. Review updates deliberately rather than using unpinned latest versions. The local dependency lockfile is runtime state and is not tracked by this configuration-only repository.
 
@@ -32,19 +33,23 @@ Personal profiles:
 
 - `scout`: read-only repository investigation.
 - `reviewer`: read-only findings; no automatic fixes or shell execution.
-- `oracle`: read-only second opinion on decisions/plans.
-- `researcher`: public-source research; explicitly loads only the web-access extension.
 - `worker`: implementation of explicitly authorized tasks, one writer per shared scope.
 
-The custom supervisor uses these five personal profiles with fresh task context, inherited personal/project instructions and skills, explicit role tools/extensions, and the parent's model/thinking by default. Children run asynchronously in Pi RPC subprocesses. It does not discover additional project/shared agents or grant nested delegation.
+The custom supervisor uses these three personal profiles with fresh task context, inherited personal/project instructions and skills, explicit role tools/extensions, and the parent's model/thinking by default. Children run asynchronously in Pi RPC subprocesses. It does not discover additional project/shared agents or grant nested delegation.
 
-Use `subagent_start`, `subagent_status`, `subagent_steer`, and `subagent_stop`; `/subagents` shows exact IDs and `/subagents stop <id>` cancels one. A compact widget shows activity, and each finished child automatically wakes the parent with its answer/status. Limits are two concurrent children, twenty starts per session, and fifteen-minute default deadlines (up to one hour per task). Children share the cwd; use non-overlapping assignments and one writer per shared scope.
+Use `subagent_start`, `subagent_status`, `subagent_steer`, and `subagent_stop` for individual assignments; `/subagents` shows exact child IDs. Use `swarm_start` for a fixed batch of structured tasks or CSV rows, with `swarm_status`, paged `swarm_results`, and explicit `swarm_pause`, `swarm_resume`, and `swarm_stop`. The queue advances without a parent-model turn per item; a widget shows progress and swarms coalesce completion/needs-input wakes. Independent review is a separate reviewer-role swarm, never an automatic approval or repair engine.
 
-Reload/session replacement/shutdown stops children and discards their in-memory history. There are no missions, workflow scripts, automatic worktrees, recovery, or detached survival. The supervisor integrates directly with goal-loop's waiting and approval policy. See [contracts, limitations and tests](agent/extensions/simple-subagents/README.md). The old package remains installed but unloaded, with its configuration and profiles preserved for reversibility.
+All roles, direct children, and swarms share one concurrency ceiling per Pi instance: **5** by default, configurable through user-level `simpleSubagents.maxConcurrency` in `agent/settings.json`. Per-swarm `maxParallel` can request less, never raise it. Batches can exceed twenty tasks. Deadlines default to fifteen minutes from dispatch, up to one hour per task. Children share the cwd; use non-overlapping assignments and one writer per shared scope. The [Pi subagent reference](../.agents/skills/agent-tools/references/pi-subagents.md), selected through `agent-tools`, covers task scoping, evidence consumption, separate reviews, and recovery.
+
+Reload/session replacement/shutdown stops children. Swarm manifests and outcomes survive under the agent directory, but armed execution does not: resuming never-started items requires explicit authorization, and failed/interrupted attempts are not silently replayed. Exclusive per-run ownership prevents duplicate recovery; stale claims or unconfirmed writers require explicit reconciliation as described in the extension README. Failed storage writes cannot guarantee durable evidence. There are no missions, workflow/DAG engines, automatic worktrees, commits, merges, or detached survival. The supervisor integrates directly with goal-loop's waiting and approval policy. See [contracts, limitations and tests](agent/extensions/simple-subagents/README.md). The old package remains installed but unloaded, with its configuration and profiles preserved for reversibility.
 
 The user approved cleanup of package-owned run/cache files under `C:\Users\johan\AppData\Local\Temp\pi-subagents-user-johan`. This does not authorize worktree or source-file deletion.
 
 The user also approved removal of package-created `C:\Users\johan\AppData\Local\Temp\pi-subagents-tracked-diff-*` scratch directories used to fingerprint large Git diffs, including when Pi works in another repository. These legacy cleanup exceptions do not authorize worktree or source-file deletion; this migration performs no package cleanup. Do not enable managed worktrees, external CLI agents, or other cleanup features without checking their separate side effects.
+
+### Chat snapshot viewer
+
+Use `/chat-view` to revisit saved messages in the current branch, including older pre-compaction messages, without thinking or tool output. The read-only snapshot opens at the latest message: use arrows/PageUp/PageDown to scroll, ←/→ to jump between messages, **c** to copy the top message, and **Esc** to close. Reopen to refresh; the native view, execution and session history remain untouched. See [controls and limitations](agent/extensions/chat-view/README.md).
 
 ### Background shell jobs
 
@@ -52,19 +57,25 @@ Use `/bg <bash command>`, `/jobs`, `/job-logs <id>`, and `/job-stop <id>`. The a
 
 ### Bounded goal loop
 
-`/loop <goal>` starts a confirmed, session-local continuation loop: up to five rounds by default, a 30-minute continuation window, and a default 60-second delay after Pi settles. Use `/loop --rounds 10 <goal>` to set a total of 1–20 rounds (including the first), or `/loop --delay 15 <goal>` for a different per-loop delay (1–600 seconds). Normal input steers without resetting budgets; typing pauses the countdown. `/loop stop` cancels future rounds. Completion, blockers, missing checkpoints, aborts, unsupported background handoffs, and session lifecycle changes disarm it. Session-owned subagents instead suspend the loop within the same round until their results are consumed; manual approval and budgets remain unchanged. No timers survive reload. See [contracts, limitations, and tests](agent/extensions/goal-loop/README.md).
+`/loop <goal>` starts a confirmed, session-local continuation loop: up to five rounds by default, a 30-minute continuation window, and a default 60-second delay after Pi settles. Use `/loop --rounds 10 <goal>` to set a total of 1–20 rounds (including the first), or `/loop --delay 15 <goal>` for a different per-loop delay (1–600 seconds). Normal input steers without resetting budgets; typing pauses the countdown. `/loop stop` cancels future rounds. Completion, blockers, missing checkpoints, aborts, unsupported background handoffs, and session lifecycle changes disarm it. Session-owned children and whole queued swarms instead suspend the loop within the same round until their results are consumed; manual approval and budgets remain unchanged. Stopping/expiring the loop revokes further swarm admission without killing active children. No timers survive reload. See [contracts, limitations, and tests](agent/extensions/goal-loop/README.md).
 
-`/loop --manual <goal>` pauses between iterations until `/loop resume` approves one next round, with desktop approval/completion alerts. Manual loops have no time deadline, even while awaiting approval; the selected round limit (default five) still applies. The 30-minute deadline applies only to automatic loops. Feedback alone does not resume a manual loop; terminal stops require a new loop.
+`/loop --manual <goal>` pauses between iterations until `/loop resume` approves one next round. The desktop-notification extension is disabled; agents use Switchboard for relevant updates and completion. Manual loops have no time deadline, even while awaiting approval; the selected round limit (default five) still applies. The 30-minute deadline applies only to automatic loops. Feedback alone does not resume a manual loop; terminal stops require a new loop.
 
-### Desktop notifications
+### MCP Browser
 
-`/notify enable` permits agent-requested desktop alerts for the current session, including mid-loop, via `notify_send`. `/notify disable` revokes that permission and cancels any task subscription, without stopping work or changing manual-loop alerts. Permission resets on reload/session replacement. Inside a loop, the agent sends before its final `loop_checkpoint`; alerts do not approve another round.
+Pi uses its built-in MCP support to read `agent/mcp.json`. The `mcp-browser` entry runs `C:\Users\johan\terra-tech\prototypes\mcp-browser\dist\mcp-browser.exe` with `--mcp`, the shared `%APPDATA%\MCPBrowser\Wails` data directory, and agent name `Pi`. MCP tools use the default `codemode` exposure: discover them with `searchTools()` or `describeNamespace("mcp__mcp_browser")`, then call `tools.mcp__mcp_browser__<tool>()` from a `codemode` script. This machine-local configuration is Git-ignored; `/mcp` inspects configured servers and connections.
 
-`/notify <task>` opts one task into desktop completion/input-needed alerts. Waiting for background/delegated work does not count as completion; the agent explicitly reports the overall task outcome. `/notify off` cancels the subscription, `/notify status` inspects it, and `/notify test` checks desktop delivery. Ordinary tasks and automatic loops remain silent unless session permission is enabled and the agent explicitly requests an alert. Windows uses a native PowerShell toast without installing packages or changing machine settings. Only generic statuses leave Pi. See [behavior, supported terminals, caveats, and tests](agent/extensions/notifications/README.md).
+Browser, diagram, and Switchboard operating guidance lives in `agent-tools` and its on-demand references; communication policy lives in `development-workflow` and is surfaced by `agent/AGENTS.md`. Agents proactively send significant progress/input-needed updates and always send a task-completion notice when Switchboard is available, so the user knows they can continue. Chat is the fallback when unavailable. This is agent-driven communication, not automatic loop approval or a background-job completion hook. The redundant desktop-notification extension is disabled; reload unloads its commands, tools and injected instructions.
 
-### Diagram canvas
+### Skills
 
-Ask Pi to explain code with a flowchart, sequence diagram, or state machine. It can create/update named Mermaid diagrams with explanations and repository-relative source notes, mark current/proposed/mixed designs and observed/inferred relationships, and open them in a local browser canvas. `/canvas` opens it; `/canvas status` reports whether it is listening; `/canvas close` stops the server. Zoom/pan, source inspection, render-error feedback, and sanitized SVG export are included. Mermaid is pinned locally; no hosted rendering or repository-file server is used. See [setup, controls, security boundaries, and tests](agent/extensions/diagram-canvas/README.md).
+Skills are discovered from `agent/skills/` and `~/.agents/skills/`; their instructions guide work without enabling integrations. The three shared core entry points are:
+
+- [`development-workflow`](../.agents/skills/development-workflow/SKILL.md): coordinate design, investigation, handoffs, review, and PR work.
+- [`engineering-practices`](../.agents/skills/engineering-practices/SKILL.md): judge and produce code, tests, documentation, refactoring, and verification.
+- [`agent-tools`](../.agents/skills/agent-tools/SKILL.md): use the relevant browser, diagram, Switchboard, subagent, and worktree tools.
+
+Read only the references relevant to the task; they are not separate skill entry points. Specialist skills remain available. Session-owned subagents inherit instructions and skills but do not load MCP integrations; they return source evidence for the parent to publish.
 
 ## Safety and reload
 
@@ -72,7 +83,7 @@ Ask Pi to explain code with a flowchart, sequence diagram, or state machine. It 
 - `agent/AGENTS.md` provides behavioral filesystem and approval rules, not an enforced sandbox. Parent sessions and subagents use Pi's normal instruction discovery; children keep context-file discovery enabled even with ambient extensions disabled.
 - The deletion guard is disabled because its conservative parser caused excessive interruptions. Its code/tests are archived under `agent/disabled-extensions/deletion-guard/`, outside auto-discovery; the worker and `/bg` no longer load it. Reload existing parent sessions and launch fresh children to unload old instances. No command/path enforcement is provided by that guard while disabled.
 - Existing package-owned cleanup approvals remain narrow exceptions, not general shell-deletion exemptions.
-- No MCP adapter is installed.
+- MCP integrations use Pi's built-in MCP support and namespaced tools through `codemode`.
 - Default model is `openai-codex/gpt-6.1-sol`, high thinking.
 
-Use `/reload` to load enabled extensions, agent resources, skills, and context files. Reload cancels custom background jobs and session-owned subagents and discards their in-memory history. Restart pi to apply startup defaults reliably; resumed sessions may restore model/thinking selections.
+Use `/reload` to apply MCP configuration changes and load enabled extensions, agent resources, skills, and context files. Reload cancels custom background jobs and session-owned subagents and discards their in-memory histories; durable swarm inputs/results remain readable without restarting work. Restart pi to apply startup defaults reliably; resumed sessions may restore model/thinking selections.

@@ -3,7 +3,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { stripVTControlCharacters } from "node:util";
 import { randomUUID } from "node:crypto";
-import { CHILD_STARTED, COMPLETION_TYPE, START_QUERY, type ChildStarted, type CompletionDetails, type StartQuery } from "../simple-subagents/contract.ts";
+import { CHILD_STARTED, COMPLETION_TYPE, START_QUERY, RUN_REGISTER, RUN_QUERY, RUN_REVOKED, RUN_NOTICE, SWARM_COMPLETION_TYPE, type RunClaim, type SwarmDelivery, type ChildStarted, type CompletionDetails, type StartQuery } from "../simple-subagents/contract.ts";
 import { GoalLoop, continuationPrompt, parseLoopStart } from "./loop.ts";
 import { ATTENTION_EVENT, type AttentionRequest } from "../notifications/contract.ts";
 
@@ -11,7 +11,11 @@ const TYPE = "goal-loop";
 const safe = (value: string) => stripVTControlCharacters(value).replace(/[\x00-\x1f\x7f]/g, " ").slice(0, 240);
 
 export default function goalLoopExtension(pi: ExtensionAPI): void {
-  const loop = new GoalLoop();
+  const loop = new GoalLoop(reason => {
+    if (sessionId && loopId && loop.state) pi.events.emit(RUN_REVOKED, { sessionId, loopId, round: loop.state.round, reason });
+  });
+  const runs = new Map<string, number>();
+  const notices = new Map<string, SwarmDelivery>();
   let timer: ReturnType<typeof setInterval> | undefined;
   let sessionId: string | undefined;
   let generation = 0;
@@ -147,6 +151,7 @@ export default function goalLoopExtension(pi: ExtensionAPI): void {
       sessionId = ctx.sessionManager.getSessionId();
       loop.start(goal, Date.now(), delayMs, manual, rounds);
       loopId = randomUUID();
+      runs.clear(); notices.clear();
       attentionKey = "";
       pi.events.emit("goal-loop:started", { sessionId });
       timer = setInterval(() => tick(ctx), 1000);
@@ -197,7 +202,14 @@ export default function goalLoopExtension(pi: ExtensionAPI): void {
     if (message.role === "user") { if (starting) generation++; loop.steer(); render(ctx); }
     else if (message.role === "custom" && message.customType !== TYPE) {
       const identity = message.details as CompletionDetails | undefined;
-      if (message.customType === COMPLETION_TYPE && identity?.sessionId === sessionId && identity.loopId === loopId && loop.childResult(identity.id)) render(ctx);
+      const delivery = message.details as SwarmDelivery | undefined;
+      const expected = delivery?.deliveryId ? notices.get(delivery.deliveryId) : undefined;
+      if (message.customType === SWARM_COMPLETION_TYPE && expected && delivery?.sessionId === sessionId && delivery.loopId === loopId && delivery.round === loop.state?.round && runs.get(delivery.id) === delivery.round && expected.id === delivery.id && expected.final === delivery.final && !loop.expired(Date.now())) {
+        notices.delete(delivery.deliveryId);
+        if (delivery.final) { runs.delete(delivery.id); loop.childResult(delivery.id); }
+        else loop.steer();
+        render(ctx);
+      } else if (message.customType === COMPLETION_TYPE && identity?.sessionId === sessionId && identity.loopId === loopId && !loop.expired(Date.now()) && loop.childResult(identity.id)) render(ctx);
       else stop("External message takes precedence.", ctx);
     }
   });
@@ -212,7 +224,8 @@ export default function goalLoopExtension(pi: ExtensionAPI): void {
   pi.on("agent_end", (event, ctx) => {
     if (event.messages.some(message => message.role === "assistant" && ["error", "aborted"].includes(message.stopReason))) stop("Agent error or abort; no automatic retry by the loop.", ctx);
   });
-  pi.on("agent_settled", (_event, ctx) => {
+  pi.on("agent_settled", (event, ctx) => {
+    if (event.aborted || ctx.signal?.aborted) return stop("Parent aborted; queued admission revoked.", ctx);
     if (!ctx.isIdle() || ctx.hasPendingMessages()) return;
     const wasWorking = loop.state?.phase === "working";
     loop.settled(Date.now());
@@ -236,13 +249,32 @@ export default function goalLoopExtension(pi: ExtensionAPI): void {
       query.allowed = false;
       query.reason = "No approved working loop round. Wait for /loop resume or the next automatic round; completion notices do not grant approval.";
       if (currentContext) render(currentContext);
-    } else query.loopId = loopId;
+    } else { query.loopId = loopId; query.round = loop.state.round; }
   });
   pi.events.on(CHILD_STARTED, (data) => {
     const child = data as ChildStarted;
     if (child.sessionId !== sessionId || child.loopId !== loopId || !loopId) return;
     loop.childStarted(child.id);
     if (currentContext) render(currentContext);
+  });
+
+  pi.events.on(RUN_REGISTER, data => {
+    const claim = data as RunClaim;
+    claim.allowed = false;
+    if (claim.sessionId !== sessionId || claim.loopId !== loopId || claim.round !== loop.state?.round || loop.expired(Date.now()) || loop.state?.phase !== "working" || currentContext?.signal?.aborted) return;
+    if (!runs.has(claim.id)) loop.childStarted(claim.id);
+    runs.set(claim.id, claim.round);
+    claim.allowed = true;
+    if (currentContext) render(currentContext);
+  });
+  pi.events.on(RUN_QUERY, data => {
+    const query = data as RunClaim;
+    query.allowed = false;
+    if (query.sessionId === sessionId && query.loopId === loopId && query.round === loop.state?.round && runs.get(query.id) === query.round && !loop.expired(Date.now()) && ["working", "waiting_children"].includes(loop.state!.phase) && !currentContext?.signal?.aborted) query.allowed = true;
+  });
+  pi.events.on(RUN_NOTICE, data => {
+    const delivery = data as SwarmDelivery;
+    if (delivery.sessionId === sessionId && delivery.loopId === loopId && delivery.round === loop.state?.round && runs.get(delivery.id) === delivery.round && loop.state?.phase !== "stopped") notices.set(delivery.deliveryId, { ...delivery });
   });
 
   pi.events.on("goal-loop:query", (data) => {
