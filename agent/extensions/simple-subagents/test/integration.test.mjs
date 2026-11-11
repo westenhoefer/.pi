@@ -25,20 +25,22 @@ async function harness(t, configuration, existingAgentDir) {
     for (const [name, tool] of extension.tools) tools.set(name, tool.definition);
     for (const [name, command] of extension.commands) commands.set(name, command);
   }
-  const sent = [], widgets = new Map(), statuses = new Map(), notices = [];
+  const sent = [], widgets = new Map(), statuses = new Map(), notices = [], entries = [];
   let idle = true, sessionId = "integration", sendFailure = false;
   const ctx = {
     mode: "tui", hasUI: true, cwd: process.cwd(), thinkingLevel: "high",
     model: { provider: "test-provider", id: "test-model" }, isProjectTrusted: () => false,
+    modelRegistry: { getAvailable: () => [{ provider: "alpha", id: "model/a", name: "First choice" }, { provider: "beta", id: "model-b", name: "Second choice" }, { provider: "gamma", id: "model-c", name: "Outside scope" }] },
     isIdle: () => idle, hasPendingMessages: () => false,
-    sessionManager: { getSessionId: () => sessionId, getLeafId: () => "leaf" },
+    sessionManager: { getSessionId: () => sessionId, getLeafId: () => "leaf", getBranch: () => entries },
     ui: { confirm: async () => true, notify: text => notices.push(text), getEditorText: () => "", setWidget: (key, lines) => widgets.set(key, lines), setStatus: (key, text) => statuses.set(key, text) },
   };
   loaded.runtime.sendMessage = (message, options) => { if (sendFailure) throw new Error("dispatch failed"); sent.push({ message, options }); idle = false; };
+  loaded.runtime.appendEntry = (customType, data) => entries.push({ type: "custom", customType, data, id: `entry-${entries.length}` });
   async function emit(name, event = {}) {
     for (const extension of loaded.extensions) for (const handler of extension.handlers.get(name) ?? []) await handler(event, ctx);
   }
-  const call = (name, args = {}) => tools.get(name).execute("call", args, undefined, undefined, ctx);
+  const call = (name, args = {}, signal) => tools.get(name).execute("call", args, signal, undefined, ctx);
   const checkpoint = outcome => call("loop_checkpoint", { outcome, progress: "Concrete new verification evidence", next: outcome === "continue" ? "Review remaining requirement" : "" });
   const children = () => { const query = {}; bus.emit("test:children", query); return query.children; };
   async function complete(index) {
@@ -56,8 +58,167 @@ async function harness(t, configuration, existingAgentDir) {
     await readdir(agentDir); // Inspect only this test's owned fixture before cleanup.
     await rm(agentDir, { recursive: true });
   });
-  return { ctx, bus, agentDir, sent, widgets, statuses, notices, children, call, checkpoint, complete, emit, settle, command: args => commands.get("loop").handler(args, ctx), setSession: value => { sessionId = value; }, failNotifications: () => { sendFailure = true; } };
+  return { ctx, bus, agentDir, sent, widgets, statuses, notices, children, call, checkpoint, complete, emit, settle, entries, commands, loaded, panel: args => commands.get("panel").handler(args, ctx), command: args => commands.get("loop").handler(args, ctx), setSession: value => { sessionId = value; }, failNotifications: () => { sendFailure = true; } };
 }
+
+const panelModels = [{ model: "alpha/model/a", thinking: "medium" }, { model: "beta/model-b", thinking: "low" }];
+const flag = (child, name) => child.launch.args[child.launch.args.indexOf(name) + 1];
+
+test("direct child model/thinking overrides are local, exact and authenticated", { skip }, async t => {
+  const h = await harness(t);
+  const child = await h.call("subagent_start", { agent: "scout", task: "Explore", model: "alpha/model/a", thinking: "medium" });
+  await flush(); assert.equal(flag(h.children()[0], "--provider"), "alpha"); assert.equal(flag(h.children()[0], "--model"), "model/a");
+  assert.equal(child.details.selection.thinking, "medium"); assert.equal(h.ctx.model.provider, "test-provider");
+  await h.call("subagent_start", { agent: "scout", task: "Defaults" }); await flush();
+  assert.equal(flag(h.children()[1], "--provider"), "test-provider"); assert.equal(flag(h.children()[1], "--thinking"), "high");
+  await assert.rejects(h.call("subagent_start", { agent: "scout", task: "Reject alias", model: "model/a" }), /unavailable/);
+  assert.equal(h.children().length, 2);
+});
+
+test("mixed-model panel shares the pool, sends identical briefs and wakes once for comparison", { skip }, async t => {
+  const h = await harness(t, { simpleSubagents: { maxConcurrency: 1 } });
+  await h.call("subagent_start", { agent: "scout", task: "Existing work" }); await flush();
+  const run = await h.call("panel_start", { question: "Options and tradeoffs?", models: panelModels }); await flush();
+  assert.equal(h.children().length, 1); assert.equal(run.details.effectiveParallelism, 1);
+  const queued = await h.call("swarm_results", { id: run.details.swarmId });
+  assert.deepEqual(queued.details.results.map(item => item.selection.provider), ["alpha", "beta"]);
+  await h.complete(0); await flush();
+  assert.equal(h.children().length, 2); assert.equal(flag(h.children()[1], "--model"), "model/a");
+  assert.equal(flag(h.children()[1], "--tools"), "read,grep,find,ls");
+  await assert.rejects(h.call("panel_compare", { id: run.details.swarmId, comparison: "Premature" }), /still has/);
+  await finishMember(h, 1); assert.equal(h.sent.length, 1);
+  assert.equal(flag(h.children()[2], "--provider"), "beta"); assert.equal(flag(h.children()[2], "--thinking"), "low");
+  assert.equal(h.children()[1].commands.find(command => command.type === "prompt").message, h.children()[2].commands.find(command => command.type === "prompt").message);
+  await finishMember(h, 2); assert.equal(h.sent.length, 2);
+  assert.match(h.sent[1].message.content, /Question: Options and tradeoffs\?/); assert.match(h.sent[1].message.content, /panel_compare/);
+  assert.equal(h.sent[1].message.customType, "simple-swarm-result");
+  const before = await h.call("swarm_results", { id: run.details.swarmId });
+  await h.call("panel_compare", { id: run.details.swarmId, comparison: "## Disagreement\n\nAlpha favors A; Beta favors B. Measure latency to decide." });
+  assert.equal(h.entries.at(-1).customType, "simple-panel-comparison");
+  assert.match(h.entries.at(-1).data.text, /Measure latency/);
+  const after = await h.call("swarm_results", { id: run.details.swarmId }); assert.deepEqual(after.details, before.details);
+});
+
+test("panel validates all models and combined brief before creating a manifest or launching", { skip }, async t => {
+  const h = await harness(t);
+  for (const models of [[panelModels[0]], [panelModels[0], panelModels[0]], [panelModels[0], { model: "unknown/model" }], [panelModels[0], { model: "beta/model-b", thinking: "infinite" }]]) {
+    await assert.rejects(h.call("panel_start", { question: "Explore", models }));
+  }
+  await assert.rejects(h.call("panel_start", { question: "x".repeat(16000), models: panelModels }), /combined task/);
+  assert.equal(h.children().length, 0); assert.equal(h.entries.length, 0);
+  assert.equal((await readdir(h.agentDir)).includes("simple-subagents"), false);
+  h.ctx.mode = "rpc";
+  await assert.rejects(h.call("panel_start", { question: "Explore", models: panelModels }), /parent TUI/);
+  await h.panel("view"); assert.match(h.notices.at(-1), /parent TUI/);
+});
+
+test("panel command filters scoped display names, preserves thinking and launches only after explicit Start", { skip }, async t => {
+  const h = await harness(t);
+  const sdk = await import(pathToFileURL(join(root, "dist/index.js")).href); sdk.initTheme("light", false);
+  const tuiModule = await import(pathToFileURL(join(root, "node_modules/@earendil-works/pi-tui/dist/index.js")).href);
+  const themeModule = await import(pathToFileURL(join(root, "dist/modes/interactive/theme/theme.js")).href);
+  h.ctx.scopedModels = [{ model: { provider: "alpha", id: "model/a" }, thinkingLevel: "medium" }, { model: { provider: "beta", id: "model-b" }, thinkingLevel: "low" }];
+  let picker, opened = 0;
+  h.ctx.ui.editor = async () => "Which approach?";
+  h.ctx.ui.custom = (factory, options) => {
+    assert.notEqual(options?.overlay, true, "result overlays must not open automatically");
+    assert.equal(options.blocked.kind, "question"); opened++;
+    return new Promise(done => { picker = factory({ terminal: { rows: 16 }, requestRender() {} }, themeModule.theme,
+      new tuiModule.KeybindingsManager(tuiModule.TUI_KEYBINDINGS), selected => { picker.dispose(); done(selected); }); picker.focused = true; });
+  };
+  const screen = () => picker.render(120).join("\n");
+  let pending = h.panel(""); await flush(); assert.equal(h.children().length, 0);
+  assert.doesNotMatch(screen(), /gamma|Outside scope/);
+  picker.handleInput("First"); assert.match(screen(), /First choice/); assert.doesNotMatch(screen(), /Second choice/);
+  picker.handleInput("\r"); assert.equal(h.children().length, 0);
+  for (let i = 0; i < 5; i++) picker.handleInput("\x7f");
+  picker.handleInput("Second"); assert.match(screen(), /Second choice/); picker.handleInput("\r");
+  assert.equal(h.children().length, 0); picker.handleInput("\t"); picker.handleInput("\r");
+  await pending; await flush(); assert.equal(h.children().length, 2); assert.equal(opened, 1);
+  assert.equal(flag(h.children()[0], "--thinking"), "medium"); assert.equal(flag(h.children()[1], "--thinking"), "low");
+  pending = h.panel("Cancelled question"); await flush(); picker.handleInput("\x1b"); await pending;
+  assert.equal(h.children().length, 2); assert.equal(opened, 2);
+  await h.panel("stop"); assert.equal(h.children().every(child => child.closed), true);
+});
+
+test("panel dispatch pins the provider bootstrap per member without persisting environment", { skip }, async t => {
+  const h = await harness(t);
+  h.ctx.modelRegistry.getAvailable = () => [{ provider: "cursor", id: "auto" }, { provider: "alpha", id: "model/a" }];
+  const run = await h.call("panel_start", { question: "Explore", models: [{ model: "cursor/auto" }, panelModels[0]] }); await flush();
+  assert.deepEqual(h.children().map(child => child.launch.env.PI_SIMPLE_SUBAGENT_PROVIDER), ["cursor", "alpha"]);
+  assert.equal(h.children()[0].launch.env.PI_CURSOR_NATIVE_TOOLS, process.env.PI_CURSOR_NATIVE_TOOLS, "provider policy is initialized in the isolated child");
+  const record = await readFile(join(h.agentDir, "simple-subagents/runs", `${run.details.swarmId}.json`), "utf8");
+  assert.equal(record.includes("PI_SIMPLE_SUBAGENT_PROVIDER"), false); assert.equal(record.includes("CURSOR_API_KEY"), false);
+});
+
+test("panel viewer refresh and reopen are read-only, comparison follows the branch, truncation/failure stay visible", { skip }, async t => {
+  const h = await harness(t);
+  const sdk = await import(pathToFileURL(join(root, "dist/index.js")).href); sdk.initTheme("light", false);
+  const tuiModule = await import(pathToFileURL(join(root, "node_modules/@earendil-works/pi-tui/dist/index.js")).href);
+  const themeModule = await import(pathToFileURL(join(root, "dist/modes/interactive/theme/theme.js")).href);
+  let viewer, config;
+  h.ctx.ui.custom = (factory, options) => { config = options; return new Promise(done => { viewer = factory({ terminal: { rows: 18 }, requestRender() {} }, themeModule.theme, new tuiModule.KeybindingsManager(tuiModule.TUI_KEYBINDINGS), () => { viewer.dispose(); done(); }); }); };
+  const run = await h.call("panel_start", { question: "Explore options", models: panelModels }); await flush();
+  h.children()[0].event({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "x".repeat(17000) }], stopReason: "stop" } });
+  h.children()[0].event({ type: "agent_settled" }); await flush();
+  let opening = h.panel("view"); await flush(); assert.equal(config.overlay, true); assert.equal(config.overlayOptions.width, "100%");
+  viewer.handleInput("\x1b[C"); assert.match(viewer.render(160).join("\n"), /[Tt]runcat/);
+  h.children()[1].event({ type: "message_end", message: { role: "assistant", content: [], stopReason: "error", errorMessage: "provider unavailable" } });
+  h.children()[1].event({ type: "agent_settled" }); await flush();
+  viewer.handleInput("r"); viewer.handleInput("\x1b[C"); assert.match(viewer.render(160).join("\n"), /provider unavailable/);
+  viewer.handleInput("\x1b"); await opening;
+  await h.call("panel_compare", { id: run.details.swarmId, comparison: "Alpha was truncated; Beta failed. No reliable consensus." });
+  opening = h.panel(`view ${run.details.swarmId}`); await flush(); assert.match(viewer.render(160).join("\n"), /No reliable consensus/);
+  viewer.handleInput("\x1b"); await opening;
+  h.entries.pop(); // Navigating away from a saved comparison must not leak it back into this branch.
+  opening = h.panel("view"); await flush(); assert.doesNotMatch(viewer.render(160).join("\n"), /No reliable consensus/);
+  viewer.handleInput("\x1b"); await opening;
+  assert.equal(h.children().length, 2); assert.equal(h.sent.length, 1);
+});
+
+test("panel resumes only queued models with pinned selections after reload; viewer works without restarting", { skip }, async t => {
+  const h = await harness(t, { simpleSubagents: { maxConcurrency: 1 } });
+  const run = await h.call("panel_start", { question: "Explore", models: panelModels }); await flush();
+  await h.call("swarm_pause", { id: run.details.swarmId }); await finishMember(h, 0); await h.emit("session_shutdown");
+  const fresh = await harness(t, undefined, h.agentDir); fresh.ctx.model = { provider: "new-parent", id: "other" };
+  const data = await fresh.call("swarm_results", { id: run.details.swarmId }); assert.equal(data.details.results[1].selection.provider, "beta");
+  assert.equal(fresh.children().length, 0);
+  await fresh.call("swarm_resume", { id: run.details.swarmId }); await flush();
+  assert.equal(flag(fresh.children()[0], "--provider"), "beta"); assert.equal(flag(fresh.children()[0], "--thinking"), "low");
+  await finishMember(fresh, 0); await fresh.emit("session_shutdown");
+});
+
+test("panel viewing refuses active loops without opening UI, revoking queued work or approving a round", { skip }, async t => {
+  const h = await harness(t, { simpleSubagents: { maxConcurrency: 1 } }); await h.command("--manual explore");
+  let opened = 0; h.ctx.ui.custom = async () => { opened++; };
+  const run = await h.call("panel_start", { question: "Explore", models: panelModels }); await flush();
+  await h.checkpoint("waiting"); await h.settle();
+  await h.panel("view");
+  assert.equal(opened, 0); assert.match(h.notices.at(-1), /unavailable while a goal loop is active/);
+  assert.match(h.statuses.get("goal-loop"), /waiting for 1/);
+  assert.equal((await h.call("swarm_status", { id: run.details.swarmId })).details.armed, true);
+  assert.equal(h.children()[0].closed, false);
+  await finishMember(h, 0); assert.equal(h.children().length, 2, "view refusal must not revoke queued dispatch");
+  await finishMember(h, 1);
+  await h.emit("message_start", { message: { role: "custom", ...h.sent.at(-1).message } });
+  await h.checkpoint("continue"); await h.settle();
+  assert.match(h.statuses.get("goal-loop"), /approval required/);
+  await h.panel("view"); assert.equal(opened, 0); assert.match(h.statuses.get("goal-loop"), /approval required/);
+  await h.command("stop"); await h.panel("view"); assert.equal(opened, 1);
+  assert.equal(h.children().length, 2);
+});
+
+test("panel shares whole-run loop ownership and abort during preparation authorizes nothing", { skip }, async t => {
+  const h = await harness(t, { simpleSubagents: { maxConcurrency: 1 } }); await h.command("--manual explore");
+  const run = await h.call("panel_start", { question: "Explore", models: panelModels }); await flush();
+  await h.checkpoint("waiting"); await h.settle(); assert.match(h.statuses.get("goal-loop"), /waiting for 1/);
+  await h.command("stop"); await finishMember(h, 0); assert.equal(h.children().length, 1);
+  assert.equal((await h.call("swarm_status", { id: run.details.swarmId })).details.counts.queued, 1);
+  const other = await harness(t); const controller = new AbortController();
+  const starting = other.call("panel_start", { question: "Explore", models: panelModels }, controller.signal); controller.abort();
+  await assert.rejects(starting, /abort/i); await flush(); assert.equal(other.children().length, 0); assert.equal(other.entries.length, 0);
+  assert.equal((await readdir(other.agentDir)).includes("simple-subagents"), false);
+});
 
 test("both real-loaded extensions coordinate parallel completion wakes and manual approval", { skip }, async t => {
   const h = await harness(t); await h.command("--manual goal");

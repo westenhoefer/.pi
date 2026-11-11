@@ -40,6 +40,17 @@ async function harness(t) {
   return { ctx, bus, sent, notices, statuses, attention, emit, command, checkpoint, settle, tick: ms => t.mock.timers.tick(ms), setIdle: value => { idle = value; }, setPending: value => { pending = value; }, setEditor: value => { editor = value; }, setSession: value => { session = value; }, setLeaf: value => { leaf = value; } };
 }
 
+test("loop-status query is session-scoped and observational across working, approval and stopped phases", { skip }, async t => {
+  const h = await harness(t);
+  const query = sessionId => { const result = { sessionId, active: false }; h.bus.emit("goal-loop:status-query:v1", result); return result.active; };
+  await h.emit("session_start"); assert.equal(query("test"), false);
+  await h.command("--manual goal"); assert.equal(query("test"), true); assert.equal(query("other"), false);
+  assert.equal(h.sent.length, 1);
+  await h.checkpoint(); await h.settle(); const status = h.statuses.get("goal-loop");
+  assert.equal(query("test"), true); assert.equal(h.statuses.get("goal-loop"), status); assert.equal(h.sent.length, 1);
+  await h.command("stop"); assert.equal(query("test"), false); assert.equal(h.sent.length, 1);
+});
+
 test("manual loop: notify once after settlement, feedback stays paused, resume approves one round", { skip }, async t => {
   const h = await harness(t); await h.command("--manual goal");
   await h.checkpoint();

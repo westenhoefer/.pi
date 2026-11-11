@@ -7,13 +7,13 @@ import type { ChildSnapshot, ChildState } from "./supervisor.ts";
 export interface TaskOutcome {
   taskId: string; attempt: 0 | 1; state: "queued" | "interrupted" | ChildState;
   childId?: string; startedAt?: number; endedAt?: number; answer?: string; answerTruncated?: boolean; error?: string;
-  usage?: ChildSnapshot["usage"]; evidence?: { reference: string; independentlyVerified: false };
+  usage?: ChildSnapshot["usage"]; selection?: ChildSnapshot["selection"]; evidence?: { reference: string; independentlyVerified: false };
 }
 export interface RunRecord {
   version: 1; id: string; createdAt: number; cwd: string; profile: Profile; instruction: string;
   items: ManifestItem[]; requestedParallelism: number; timeoutSeconds: number;
   owner: { pid: number; instance: string }; state: "running" | "paused" | "stopped" | "completed";
-  outcomes: TaskOutcome[]; reason?: string;
+  outcomes: TaskOutcome[]; reason?: string; panel?: { question: string };
 }
 
 export function readConcurrency(agentDir: string): { limit: number; error?: string } {

@@ -12,6 +12,9 @@ export const RUN_QUERY = "simple-subagents:run-query:v1";
 export const RUN_NOTICE = "simple-subagents:run-notice:v1";
 export const RUN_REVOKED = "simple-subagents:run-revoked:v1";
 export const SWARM_COMPLETION_TYPE = "simple-swarm-result";
+// Observational only: lets the panel avoid a UI prompt that would revoke loop work.
+export const LOOP_STATUS_QUERY = "goal-loop:status-query:v1";
+export interface LoopStatusQuery { sessionId: string; active: boolean }
 export interface RunIdentity { sessionId: string; id: string; loopId: string; round: number }
 export interface RunClaim extends RunIdentity { allowed: boolean; reason?: string }
 export interface RunRevoked { sessionId: string; loopId: string; round: number; reason: string }

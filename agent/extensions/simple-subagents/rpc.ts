@@ -1,9 +1,10 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
+import type { ModelSelection } from "./launch.ts";
 
 export interface RpcRecord { type: string; [key: string]: any }
-export interface Launch { command: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv }
+export interface Launch { command: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv; selection?: ModelSelection }
 export interface ChildTransport {
   request(command: RpcRecord): Promise<RpcRecord>;
   close(): Promise<void>;

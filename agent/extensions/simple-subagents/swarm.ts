@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { RunClaim, StartQuery, SwarmDelivery } from "./contract.ts";
-import type { Profile } from "./launch.ts";
+import { selectLaunch, type Profile } from "./launch.ts";
 import { taskPrompt, type ManifestItem, type SwarmInput } from "./manifest.ts";
 import { RunStore, type RunRecord } from "./run-store.ts";
 import type { Launch } from "./rpc.ts";
@@ -29,7 +29,8 @@ export class SwarmExecutor {
     if (this.closed) throw new Error("Swarm session is shutting down.");
     const record: RunRecord = {
       version: 1, id: randomUUID(), createdAt: Date.now(), cwd: launch.cwd, profile: structuredClone(profile),
-      instruction: input.instruction ?? "", items: structuredClone(items), requestedParallelism: input.maxParallel ?? this.options.ceiling,
+      instruction: input.instruction ?? "", items: structuredClone(items), panel: input.panel ? { ...input.panel } : undefined,
+      requestedParallelism: input.maxParallel ?? this.options.ceiling,
       timeoutSeconds: input.timeoutSeconds ?? 900, owner: { pid: 0, instance: "unarmed" }, state: "paused",
       outcomes: items.map(item => ({ taskId: item.id, attempt: 0, state: "queued" })),
     };
@@ -48,7 +49,7 @@ export class SwarmExecutor {
     const counts: Record<string, number> = {};
     for (const outcome of record.outcomes) counts[outcome.state] = (counts[outcome.state] ?? 0) + 1;
     return {
-      swarmId: id, state: record.state, armed: this.runs.get(id)?.record.state === "running",
+      swarmId: id, state: record.state, panel: !!record.panel, armed: this.runs.get(id)?.record.state === "running",
       taskCount: record.items.length, counts, requestedParallelism: record.requestedParallelism, effectiveParallelism: this.limit(record),
       cwd: record.cwd, tools: [...record.profile.tools], reason: record.reason,
       recoveryWarning: !this.runs.has(id) && record.outcomes.some(item => ["starting", "running", "stopping"].includes(item.state))
@@ -66,7 +67,8 @@ export class SwarmExecutor {
     let bytes = 0;
     for (let i = offset; i < Math.min(record.items.length, offset + limit); i++) {
       const item = record.items[i];
-      const result = { swarmId: id, ...record.outcomes[i], sourceRow: item.row, answerTruncated: record.outcomes[i].answerTruncated ?? false };
+      const result = { swarmId: id, ...record.outcomes[i], selection: record.outcomes[i].selection ?? item.selection,
+        sourceRow: item.row, answerTruncated: record.outcomes[i].answerTruncated ?? false };
       if (Buffer.byteLength(JSON.stringify(result)) > 38_000 && result.answer) {
         result.answer = clean(result.answer, 4000); result.answerTruncated = true;
       }
@@ -166,7 +168,7 @@ export class SwarmExecutor {
       const run = this.runs.get(child.swarmId);
       const outcome = run?.record.outcomes.find(item => item.childId === child.id);
       if (!run || !outcome || (outcome.state === child.state && outcome.error === child.error)) continue;
-      Object.assign(outcome, { state: child.state, endedAt: child.endedAt, error: child.error, answer: child.output, answerTruncated: child.outputTruncated, usage: child.usage,
+      Object.assign(outcome, { state: child.state, endedAt: child.endedAt, error: child.error, answer: child.output, answerTruncated: child.outputTruncated, usage: child.usage, selection: child.selection,
         evidence: { reference: `${this.options.store.path(run.record.id)}#/outcomes/${run.record.outcomes.indexOf(outcome)}`, independentlyVerified: false } });
       try { this.options.store.save(run.record); }
       catch (error) { run.record.state = "paused"; run.record.reason = `Outcome persistence failed: ${String(error)}`; run.detach?.(); }
@@ -271,8 +273,10 @@ export class SwarmExecutor {
           this.options.authorize(query);
           if (!query.allowed) { this.pause(record.id, query.reason ?? "Original loop authority revoked."); break; }
         }
-        this.options.supervisor.start({ agent: record.profile.name, task: taskPrompt(record.items[index], record.instruction), launch: run.launch,
-          timeoutSeconds: record.timeoutSeconds, swarmId: record.id, taskId: record.items[index].id, loopId: run.authority.loopId });
+        const item = record.items[index];
+        this.options.supervisor.start({ agent: record.profile.name, task: taskPrompt(item, record.instruction),
+          launch: item.selection ? selectLaunch(run.launch, item.selection) : run.launch,
+          timeoutSeconds: record.timeoutSeconds, swarmId: record.id, taskId: item.id, loopId: run.authority.loopId });
       }
       const pending = record.outcomes.some(item => ["queued", "starting", "running", "stopping"].includes(item.state));
       const activeCount = record.outcomes.filter(item => ["starting", "running"].includes(item.state) || (item.state === "stopping" && !item.error)).length;

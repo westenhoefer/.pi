@@ -1,13 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { stripVTControlCharacters } from "node:util";
 import type { ChildIdentity } from "./contract.ts";
+import type { ModelSelection } from "./launch.ts";
 import type { ChildTransport, Connect, Launch, RpcRecord } from "./rpc.ts";
 
 export interface ChildUsage { input: number; output: number; cacheRead: number; cacheWrite: number; totalTokens: number; cost?: number }
 export type ChildState = "starting" | "running" | "stopping" | "succeeded" | "failed" | "blocked" | "cancelled" | "timed_out";
 export interface ChildSnapshot extends ChildIdentity {
   agent: string; task: string; state: ChildState; activity: string; output: string; outputTruncated: boolean;
-  error?: string; startedAt: number; endedAt?: number; swarmId?: string; taskId?: string; usage?: ChildUsage;
+  error?: string; startedAt: number; endedAt?: number; swarmId?: string; taskId?: string; usage?: ChildUsage; selection?: ModelSelection;
 }
 export interface StartInput { agent: string; task: string; launch: Launch; loopId?: string; timeoutSeconds?: number; swarmId?: string; taskId?: string }
 interface Child {
@@ -51,7 +52,7 @@ export class Supervisor {
     if (!Number.isInteger(timeout) || timeout < 1 || timeout > 3600) throw new Error("Timeout must be 1–3600 seconds.");
     const child: Child = { snapshot: {
       id: randomUUID(), sessionId: this.options.sessionId, loopId: input.loopId,
-      agent: input.agent, task: input.task, swarmId: input.swarmId, taskId: input.taskId,
+      agent: input.agent, task: input.task, swarmId: input.swarmId, taskId: input.taskId, selection: input.launch.selection ? { ...input.launch.selection } : undefined,
       state: "starting", activity: "starting", output: "", outputTruncated: false, startedAt: Date.now(),
     } };
     this.children.set(child.snapshot.id, child);
@@ -102,8 +103,15 @@ export class Supervisor {
     if (this.closed || child.finishing) return;
     try {
       child.transport = this.options.connect(launch, event => this.event(child, event), error => { void this.finish(child, "failed", error.message); });
-      await child.transport.request({ type: "get_state" });
+      const state = await child.transport.request({ type: "get_state" });
       if (child.finishing) return;
+      const selected = state.data?.model;
+      if (launch.selection && (selected?.provider !== launch.selection.provider || selected?.id !== launch.selection.model)) {
+        throw new Error(`Exact model selection failed: requested ${launch.selection.provider}/${launch.selection.model}, child selected ${selected ? `${selected.provider}/${selected.id}` : "no model"}. No task was sent.`);
+      }
+      if (selected?.provider && selected.id) child.snapshot.selection = {
+        provider: state.data.model.provider, model: state.data.model.id, thinking: state.data.thinkingLevel ?? child.snapshot.selection?.thinking ?? "off",
+      };
       child.snapshot.state = "running";
       child.snapshot.activity = "working";
       this.publish();
@@ -134,6 +142,10 @@ export class Supervisor {
       child.snapshot.activity = event.type === "auto_retry_start" ? "retrying provider" : "compacting";
       this.publish();
     } else if (event.type === "message_end" && event.message?.role === "assistant") {
+      if (event.message.provider && event.message.model) child.snapshot.selection = {
+        provider: event.message.provider, model: event.message.model,
+        thinking: event.message.thinkingLevel ?? child.snapshot.selection?.thinking ?? "off",
+      };
       const output = clean((event.message.content ?? []).filter((part: { type: string }) => part.type === "text").map((part: { text: string }) => part.text).join("\n"), Infinity);
       child.snapshot.outputTruncated = output.length > 16_000;
       child.snapshot.output = clean(output);

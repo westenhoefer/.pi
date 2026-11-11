@@ -3,7 +3,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { stripVTControlCharacters } from "node:util";
 import { randomUUID } from "node:crypto";
-import { CHILD_STARTED, COMPLETION_TYPE, START_QUERY, RUN_REGISTER, RUN_QUERY, RUN_REVOKED, RUN_NOTICE, SWARM_COMPLETION_TYPE, type RunClaim, type SwarmDelivery, type ChildStarted, type CompletionDetails, type StartQuery } from "../simple-subagents/contract.ts";
+import { CHILD_STARTED, COMPLETION_TYPE, START_QUERY, RUN_REGISTER, RUN_QUERY, RUN_REVOKED, RUN_NOTICE, SWARM_COMPLETION_TYPE, LOOP_STATUS_QUERY, type LoopStatusQuery, type RunClaim, type SwarmDelivery, type ChildStarted, type CompletionDetails, type StartQuery } from "../simple-subagents/contract.ts";
 import { GoalLoop, continuationPrompt, parseLoopStart } from "./loop.ts";
 import { ATTENTION_EVENT, type AttentionRequest } from "../notifications/contract.ts";
 
@@ -242,6 +242,11 @@ export default function goalLoopExtension(pi: ExtensionAPI): void {
   });
   pi.on("session_shutdown", (_event, ctx) => { stop("Session shutdown/reload.", ctx, true); });
 
+  pi.events.on(LOOP_STATUS_QUERY, data => {
+    const query = data as LoopStatusQuery;
+    query.active = query.sessionId === currentContext?.sessionManager.getSessionId() &&
+      (starting || !!loop.state && loop.state.phase !== "stopped");
+  });
   pi.events.on(START_QUERY, (data) => {
     const query = data as StartQuery;
     if (!loop.state || loop.state.phase === "stopped" || query.sessionId !== sessionId) return;

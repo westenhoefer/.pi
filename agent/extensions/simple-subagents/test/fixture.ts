@@ -11,7 +11,12 @@ export default function fixture(pi: ExtensionAPI): void {
   pi.events.emit("test:configuration", configuration);
   registerSimpleSubagents(pi, (launch, event, exit) => {
     const child = { launch, event, exit, closed: false, commands: [] as any[],
-      async request(command: any) { child.commands.push(command); return { type: "response", success: true }; },
+      async request(command: any) {
+        child.commands.push(command);
+        const selection = launch.selection;
+        return { type: "response", success: true, data: command.type === "get_state" && selection
+          ? { model: { provider: selection.provider, id: selection.model }, thinkingLevel: selection.thinking } : undefined };
+      },
       async close() { if (closeError) throw new Error(closeError); child.closed = true; },
     };
     children.push(child);

@@ -1,11 +1,34 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { resolve } from "node:path";
-import { ADDITIONAL_TOOLS, buildLaunch, loadProfile, ROLES } from "../launch.ts";
+import { ADDITIONAL_TOOLS, buildLaunch, loadProfile, resolveSelection, ROLES, selectLaunch } from "../launch.ts";
 
 const options = { packageDir: "/pi", childRuntime: "/runtime.ts", executable: process.execPath, cwd: "/project", trusted: false,
   provider: "parent-provider", model: "parent-model", thinking: "high", env: { PI_SESSION_ID: "parent", PI_SESSION_FILE: "parent-file", PATH: "test-path" } };
 const profile = { name: "scout", prompt: "Read only.", tools: ["read", "grep"], extensions: [] };
+
+test("explicit model selection overrides role pins without changing trust, tools, environment or defaults", () => {
+  const selection = { provider: "chosen-provider", model: "chosen/model", thinking: "medium" };
+  const base = buildLaunch({ ...profile, model: "role/model" }, options);
+  const selected = selectLaunch(base, selection);
+  const direct = buildLaunch({ ...profile, model: "role/model" }, { ...options, selection });
+  assert.deepEqual(direct, selected);
+  for (const [flag, value] of [["--provider", "chosen-provider"], ["--model", "chosen/model"], ["--thinking", "medium"]]) {
+    assert.equal(selected.args.filter(arg => arg === flag).length, 1);
+    assert.equal(selected.args[selected.args.indexOf(flag) + 1], value);
+  }
+  assert.deepEqual(selected.env, { ...base.env, PI_SIMPLE_SUBAGENT_PROVIDER: "chosen-provider" }); assert.equal(selected.cwd, base.cwd);
+  assert.ok(selected.args.includes("--no-approve")); assert.ok(selected.args.includes("read,grep"));
+  assert.ok(base.args.includes("role/model")); assert.equal(base.args.includes("chosen-provider"), false);
+  selection.model = "changed"; assert.equal(selected.selection.model, "chosen/model");
+});
+
+test("explicit models resolve only exact authenticated IDs and valid thinking levels", () => {
+  const registry = { getAvailable: () => [{ provider: "chosen", id: "model/path" }] };
+  assert.deepEqual(resolveSelection(registry, "chosen/model/path", "high"), { provider: "chosen", model: "model/path", thinking: "high" });
+  for (const ref of ["model/path", "chosen/model", "missing/model/path", "--approve"]) assert.throws(() => resolveSelection(registry, ref, "high"), /unavailable/);
+  assert.throws(() => resolveSelection(registry, "chosen/model/path", "unbounded"), /thinking/);
+});
 
 test("child launch is isolated from ambient automation without disabling instruction/skill discovery", () => {
   const result = buildLaunch(profile, options);
@@ -14,6 +37,7 @@ test("child launch is isolated from ambient automation without disabling instruc
   for (const flag of ["--append-system-prompt", "--system-prompt", "--no-context-files", "--no-skills", "--approve"]) assert.equal(result.args.includes(flag), false);
   assert.equal(result.env.PI_SESSION_ID, undefined); assert.equal(result.env.PI_SESSION_FILE, undefined);
   assert.equal(result.env.PATH, "test-path"); assert.equal(result.env.PI_SIMPLE_SUBAGENT, "1");
+  assert.equal(result.env.PI_SIMPLE_SUBAGENT_PROVIDER, "parent-provider");
   assert.match(result.env.PI_SIMPLE_SUBAGENT_PROMPT, /Read only/);
   assert.equal(result.args[result.args.indexOf("--provider") + 1], "parent-provider");
   assert.equal(result.args[result.args.indexOf("--tools") + 1], "read,grep");
@@ -24,6 +48,7 @@ test("explicit role extensions/model and previously granted cwd trust are preser
   const result = buildLaunch({ ...profile, model: "other/model", extensions: ["/provider.ts"] }, { ...options, trusted: true });
   assert.ok(result.args.includes("--approve")); assert.ok(result.args.includes("/provider.ts"));
   assert.equal(result.args.includes("--provider"), false); assert.ok(result.args.includes("other/model"));
+  assert.equal(result.env.PI_SIMPLE_SUBAGENT_PROVIDER, "other");
 });
 
 test("parent-selected built-in tools augment only this profile without changing role instructions or defaults", async () => {

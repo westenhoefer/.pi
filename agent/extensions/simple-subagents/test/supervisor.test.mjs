@@ -23,6 +23,31 @@ function harness(options = {}) {
   return { supervisor, connections, completed, started, start, finish };
 }
 
+test("exact selection refuses fuzzy catalog drift, wrong providers and missing state before sending any task", async t => {
+  for (const model of [{ provider: "chosen", id: "requested-model-new" }, { provider: "other", id: "requested-model" }, undefined]) {
+    const h = harness({ request: () => ({ data: { model, thinkingLevel: "medium" } }) });
+    t.after(() => h.supervisor.shutdown());
+    h.supervisor.start({ agent: "scout", task: "Must not reach an unselected model", launch: { ...launch,
+      selection: { provider: "chosen", model: "requested-model", thinking: "high" } } });
+    await tick();
+    assert.equal(h.completed[0].state, "failed");
+    assert.match(h.completed[0].error, /Exact model selection failed.*No task was sent/);
+    assert.deepEqual(h.connections[0].requests.map(request => request.type), ["get_state"]);
+    assert.equal(h.connections[0].closed, true);
+  }
+});
+
+test("reports attribute actual child model and effective thinking rather than only requested launch flags", async t => {
+  const h = harness({ request: () => ({ data: { model: { provider: "selected", id: "model" }, thinkingLevel: "medium" } }) });
+  t.after(() => h.supervisor.shutdown());
+  const child = h.supervisor.start({ agent: "scout", task: "Explore", launch: { ...launch, selection: { provider: "selected", model: "model", thinking: "xhigh" } } });
+  assert.equal(child.selection.thinking, "xhigh");
+  await tick(); assert.equal(h.supervisor.status(child.id).selection.thinking, "medium");
+  h.connections[0].event({ type: "message_end", message: { role: "assistant", provider: "actual", model: "physical", thinkingLevel: "low", content: [{ type: "text", text: "Answer" }], stopReason: "stop" } });
+  h.connections[0].event({ type: "agent_settled" }); await tick();
+  assert.deepEqual(h.completed[0].selection, { provider: "actual", model: "physical", thinking: "low" });
+});
+
 test("parallel children return IDs immediately, complete individually once, and retain answers", async t => {
   const h = harness(); t.after(() => h.supervisor.shutdown());
   const first = h.start(), second = h.start("Review tests");

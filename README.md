@@ -11,7 +11,8 @@ The `.gitignore` is allowlist-based. Authentication, model stores, sessions, cac
 | Component | Configuration | Status |
 |---|---|---|
 | `pi-web-access@0.28.0` | `agent/web-search.json` | Enabled; Exa search, raw results, direct HTTP fetching |
-| Session-owned subagents | `agent/extensions/simple-subagents/`, `agent/agents/` | Auto-discovered on `/reload`; parallel RPC children, steering, completion wakes, goal-loop coordination |
+| `pi-cursor-sdk` (currently 0.5.29) | User-managed package in `agent/settings.json` | Parent provider; explicitly initialized for Cursor-selected children with Pi-only role tools |
+| Session-owned subagents | `agent/extensions/simple-subagents/`, `agent/agents/` | Auto-discovered on `/reload`; parallel RPC children, mixed-model `/panel` exploration and tabbed result viewer, steering, goal-loop coordination |
 | `pi-subagents@0.66.0` | `agent/extensions/subagent/config.json`, `agent/settings.json` | Retained but all package resources disabled; legacy configuration preserved |
 | Custom background jobs | `agent/extensions/background-jobs/` | Auto-discovered on `/reload` |
 | Chat snapshot viewer | `agent/extensions/chat-view/` | Auto-discovered on `/reload`; `/chat-view` opens saved user/assistant text without thinking or tools |
@@ -19,7 +20,7 @@ The `.gitignore` is allowlist-based. Authentication, model stores, sessions, cac
 | Desktop notifications | `agent/extensions/notifications/` | Disabled in `agent/settings.json`; source/tests retained, Switchboard replaces desktop alerts |
 | MCP Browser | `agent/mcp.json` → `mcp-browser` | Shared browser, persisted Mermaid diagrams, and Switchboard; namespaced tools through `codemode` |
 
-Packages are pinned in `agent/settings.json`, installed under `agent/npm/`, with dependency lifecycle scripts disabled for this installation. No global npm packages were changed. Review updates deliberately rather than using unpinned latest versions. The local dependency lockfile is runtime state and is not tracked by this configuration-only repository.
+Package sources and pins are recorded in `agent/settings.json` and installed under `agent/npm/`; Cursor is currently an unpinned user-managed package. Existing lifecycle-script policy is unchanged. No package installation, upgrade or global npm change was performed by the panel work. Review updates deliberately. The local dependency lockfile is runtime state and is not tracked by this configuration-only repository.
 
 ### Web access
 
@@ -35,9 +36,11 @@ Personal profiles:
 - `reviewer`: read-only findings; no automatic fixes or shell execution.
 - `worker`: implementation of explicitly authorized tasks, one writer per shared scope.
 
-The custom supervisor uses these three personal profiles with fresh task context, inherited personal/project instructions and skills, explicit role tools/extensions, and the parent's model/thinking by default. Children run asynchronously in Pi RPC subprocesses. It does not discover additional project/shared agents or grant nested delegation.
+The custom supervisor uses these three personal profiles with fresh task context, inherited personal/project instructions and skills, explicit role tools/extensions, and the parent's model/thinking by default. `subagent_start` can select an exact authenticated `model` and optional `thinking` for one child without changing the parent or role defaults. Children run asynchronously in Pi RPC subprocesses. It does not discover additional project/shared agents or grant nested delegation.
 
 Use `subagent_start`, `subagent_status`, `subagent_steer`, and `subagent_stop` for individual assignments; `/subagents` shows exact child IDs. Use `swarm_start` for a fixed batch of structured tasks or CSV rows, with `swarm_status`, paged `swarm_results`, and explicit `swarm_pause`, `swarm_resume`, and `swarm_stop`. The queue advances without a parent-model turn per item; a widget shows progress and swarms coalesce completion/needs-input wakes. Independent review is a separate reviewer-role swarm, never an automatic approval or repair engine.
+
+Use **`/panel [question]`** to give the same self-contained exploratory brief to multiple models: type to filter by display name/provider/model ID, **Enter** toggles selections, then **Tab → Enter** activates Start. Panels are read-only scouts using the existing swarm queue; children never see each other's answers or the parent conversation. **`/panel view [id]`** opens a snapshot overlay with a Comparison tab and original model-answer tabs; ←/→ switches tabs, **c** copies Markdown, **r** refreshes, and **Esc** only closes. **`/panel stop [id]`** explicitly cancels a panel. Viewing is refused during an active goal loop to avoid the existing overlay-prompt policy silently stopping queued work; finish or explicitly stop the loop first. Progress stays in the widget; completion asks the parent to consume all result pages and save an attributed synthesis with `panel_compare`, displayed in chat and the viewer without changing original answers. `panel_start` exposes the same launcher to the agent. Answers retain the existing 16,000-character limit with visible truncation; no live streaming or per-model conversations are added. See [panel controls, model selection and persistence](agent/extensions/simple-subagents/README.md#model-panels).
 
 All roles, direct children, and swarms share one concurrency ceiling per Pi instance: **5** by default, configurable through user-level `simpleSubagents.maxConcurrency` in `agent/settings.json`. Per-swarm `maxParallel` can request less, never raise it. Batches can exceed twenty tasks. Deadlines default to fifteen minutes from dispatch, up to one hour per task. Children share the cwd; use non-overlapping assignments and one writer per shared scope. The [Pi subagent reference](../.agents/skills/agent-tools/references/pi-subagents.md), selected through `agent-tools`, covers task scoping, evidence consumption, separate reviews, and recovery.
 
@@ -46,6 +49,12 @@ Reload/session replacement/shutdown stops children. Swarm manifests and outcomes
 The user approved cleanup of package-owned run/cache files under `C:\Users\johan\AppData\Local\Temp\pi-subagents-user-johan`. This does not authorize worktree or source-file deletion.
 
 The user also approved removal of package-created `C:\Users\johan\AppData\Local\Temp\pi-subagents-tracked-diff-*` scratch directories used to fingerprint large Git diffs, including when Pi works in another repository. These legacy cleanup exceptions do not authorize worktree or source-file deletion; this migration performs no package cleanup. Do not enable managed worktrees, external CLI agents, or other cleanup features without checking their separate side effects.
+
+### Cursor children
+
+Cursor-selected children explicitly initialize the installed provider through `agent/extensions/simple-subagents/cursor-child.ts`; `--no-extensions` still excludes unrelated ambient extensions. Cursor-native tools and ambient Cursor settings/MCP are disabled, and the Pi bridge exposes the child's existing role tools. Parent configuration remains unchanged. The real-provider offline startup check sends no model prompt; live inference is not covered.
+
+The user approved normal cleanup of **child-owned files/directories under `C:\Users\johan\.pi\agent\simple-subagents\cursor-tmp`** for current/future Cursor children, and the provider's normal deletion of its own valid regular-file catalog cache **`C:\Users\johan\.pi\agent\cursor-sdk-model-list.json`** when credentials are absent, including when Pi works in another repository. These exceptions do not cover auth/settings, persistent agent stores, existing unrelated files, or system-temp contents. See [child policy and limits](agent/extensions/simple-subagents/README.md#cursor-provider-in-children).
 
 ### Chat snapshot viewer
 
@@ -79,7 +88,7 @@ Read only the references relevant to the task; they are not separate skill entry
 
 ## Safety and reload
 
-- Use Pi's supported first-party provider implementations for parent sessions and subagents; no custom provider integration is configured.
+- Use Pi's first-party providers or the explicitly configured Cursor SDK integration. Cursor-selected children retain Pi role-tool limits through the provider's supported MCP-only mode; other extension providers must still be configured explicitly.
 - `agent/AGENTS.md` provides behavioral filesystem and approval rules, not an enforced sandbox. Parent sessions and subagents use Pi's normal instruction discovery; children keep context-file discovery enabled even with ambient extensions disabled.
 - The deletion guard is disabled because its conservative parser caused excessive interruptions. Its code/tests are archived under `agent/disabled-extensions/deletion-guard/`, outside auto-discovery; the worker and `/bg` no longer load it. Reload existing parent sessions and launch fresh children to unload old instances. No command/path enforcement is provided by that guard while disabled.
 - Existing package-owned cleanup approvals remain narrow exceptions, not general shell-deletion exemptions.

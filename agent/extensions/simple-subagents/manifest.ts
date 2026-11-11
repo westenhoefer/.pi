@@ -1,10 +1,12 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import type { ModelSelection } from "./launch.ts";
 
-export interface ManifestItem { id: string; task: string; row?: number; record?: Record<string, string> }
+export interface ManifestItem { id: string; task: string; row?: number; record?: Record<string, string>; selection?: ModelSelection }
 export interface SwarmInput {
   tasks?: { id: string; task: string }[]; csvPath?: string; instruction?: string;
   agent: string; additionalTools?: string[]; maxParallel?: number; timeoutSeconds?: number;
+  panel?: { question: string };
 }
 
 /** Strict RFC-style CSV, preserving strings and physical newlines inside quoted cells. */
