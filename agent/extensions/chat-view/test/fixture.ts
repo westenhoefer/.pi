@@ -7,5 +7,8 @@ export default function fixture(pi: ExtensionAPI): void {
     pi.events.emit("chat-view:test-copy", query);
     await query.wait;
     if (query.fail) throw new Error("Test clipboard failure");
+  }, () => {
+    pi.events.emit("chat-view:test-escape", "claim");
+    return () => { pi.events.emit("chat-view:test-escape", "release"); };
   });
 }

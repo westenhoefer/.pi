@@ -21,9 +21,10 @@ async function harness(entries = branch(), useFixture = true) {
   assert.deepEqual(loaded.errors, []);
   const extension = loaded.extensions[0];
   const command = extension.commands.get("chat-view");
-  const notices = [], copies = [];
+  const notices = [], copies = [], escapes = [];
   let viewer, options, renders = 0, opened = 0;
   bus.on("chat-view:test-copy", query => copies.push(query.text));
+  bus.on("chat-view:test-escape", action => escapes.push(action));
   const tui = { terminal: { rows: 12 }, requestRender: () => { renders++; } };
   const keys = new KeybindingsManager(TUI_KEYBINDINGS);
   const ctx = { mode: "tui", sessionManager: { getBranch: () => entries }, ui: {
@@ -33,7 +34,7 @@ async function harness(entries = branch(), useFixture = true) {
       return new Promise(done => { viewer = factory(tui, themeModule.theme, keys, () => { viewer.dispose(); done(); }); });
     },
   } };
-  return { extension, ctx, entries, bus, copies, notices, tui, keys, visibleWidth,
+  return { extension, ctx, entries, bus, copies, notices, escapes, tui, keys, visibleWidth,
     open: args => command.handler(args ?? "", ctx),
     get viewer() { return viewer; }, get options() { return options; }, get opened() { return opened; }, get renders() { return renders; },
   };
@@ -142,4 +143,17 @@ test("clipboard failure remains visible and a completed copy does not redraw a d
   h.viewer.handleInput("c");
   h.viewer.handleInput("\x1b"); await pending;
   const before = h.renders; release(); await flush(); assert.equal(h.renders, before);
+});
+
+
+test("chat overlay releases browser Escape priority on close and custom UI failure", { skip }, async () => {
+  const h = await harness();
+  const pending = h.open();
+  assert.deepEqual(h.escapes, ["claim"]);
+  h.viewer.handleInput("\x1b"); await pending;
+  assert.deepEqual(h.escapes, ["claim", "release"]);
+  h.escapes.length = 0;
+  h.ctx.ui.custom = async () => { throw new Error("Overlay failed"); };
+  await assert.rejects(h.open(), /Overlay failed/);
+  assert.deepEqual(h.escapes, ["claim", "release"]);
 });
