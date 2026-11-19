@@ -53,6 +53,8 @@ Continue alone only if that yields a verified cause whose fix stays inside the t
 
 At significant progress, human-input boundaries, and task completion, follow the `development-workflow` skill's Communication guidance and the `agent-tools` Switchboard protocol. Treat its completion notice as part of finishing: a chat summary alone is not sufficient when Switchboard is available, because the user may be waiting elsewhere.
 
+In design discussions, assume I’m comfortable with math and CS terminology. Use a precise term, invariant, signature, or counterexample when it makes a choice clearer. State the assumption it depends on and what it changes in the design. If plain language is just as precise, use it.
+
 # Universal principles
 
 Make every addition earn its place. Prefer the smallest complete solution, and spend reasoning on reducing unnecessary substance - not necessary guarantees.
