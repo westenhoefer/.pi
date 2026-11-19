@@ -45,15 +45,6 @@ Commands run with the user's permissions/environment plus current Pi session met
 
 ## Verification
 
-From the `~/.pi` repository, Node 22.18+ (tested on Node 26.8.1):
-
-```bash
-# Dependency-free registry behavior; integration tests report explicit skips.
-node --test agent/extensions/background-jobs/test/*.test.mjs
-
-# Include real process and Pi-loader tests using the already-installed Pi package.
-PI_TEST_PACKAGE_DIR='C:/Users/johan/AppData/Roaming/nvm/v26.8.1/node_modules/@earendil-works/pi-coding-agent' \
-PI_OFFLINE=1 node --test agent/extensions/background-jobs/test/*.test.mjs
-```
+Run registry unit tests directly with `node --test agent/extensions/background-jobs/test/*.test.mjs`, or include real process and Pi-loader tests by setting `PI_TEST_PACKAGE_DIR` and `PI_OFFLINE=1` as shown in the root [`README`](../../../README.md#verification).
 
 The integration tests start local Node processes, including a parent/grandchild cancellation canary. They make no model calls, install nothing, and create/delete no test files. Tests cover failure exits, missing working directories, bounded logs, timeout, capacity/eviction, unconfirmed cancellation, headless rejection, actual extension loading, agent-versus-manual completion delivery, exactly-once follow-ups for success/failure/timeout/cancellation, and shutdown suppression. Windows process-tree termination is tested locally; POSIX behavior relies on Pi's backend and has not been exercised on this machine.

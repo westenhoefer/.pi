@@ -19,11 +19,6 @@ This uses public command, session-reader, component and overlay APIs. It does no
 
 ## Offline verification
 
-From `C:/Users/johan/.pi`, using installed Node and Pi (no downloads):
-
-```bash
-PI_TEST_PACKAGE_DIR='C:/Users/johan/AppData/Roaming/nvm/v26.8.1/node_modules/@earendil-works/pi-coding-agent' \
-PI_OFFLINE=1 node --test agent/extensions/chat-view/test/*.test.mjs
-```
+Set `PI_TEST_PACKAGE_DIR` and `PI_OFFLINE=1` as shown in the root [`README`](../../../README.md#verification), then run `node --test agent/extensions/chat-view/test/*.test.mjs` from `C:\Users\johan\.pi`.
 
 Tests cover filtering, pre-compaction history, snapshot isolation, actual extension loading and Markdown/Text rendering, navigation, Unicode/narrow viewports, large-message rendering, reading-position preservation across resize/invalidation, unsupported modes and clipboard handling. UI tests simulate the overlay host and clipboard; they do not open a real terminal, touch the real clipboard or call a model. Without `PI_TEST_PACKAGE_DIR`, installed-Pi integration cases explicitly skip.

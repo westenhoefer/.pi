@@ -10,8 +10,6 @@ async function harness(t) {
   const { loadExtensions } = await import(pathToFileURL(join(piRoot, "dist/core/extensions/loader.js")).href);
   const { createEventBus } = await import(pathToFileURL(join(piRoot, "dist/core/event-bus.js")).href);
   const bus = createEventBus();
-  const attention = [];
-  bus.on("pi:attention", data => attention.push(data));
   const loaded = await loadExtensions([resolve("agent/extensions/goal-loop/index.ts")], process.cwd(), bus);
   assert.deepEqual(loaded.errors, []);
   const extension = loaded.extensions[0];
@@ -37,7 +35,7 @@ async function harness(t) {
   const command = (args) => extension.commands.get("loop").handler(args, ctx);
   const checkpoint = (outcome = "continue", progress = "New result; test passed") => extension.tools.get("loop_checkpoint").definition.execute("cp", { outcome, progress, next: outcome === "continue" ? "Verify remaining requirement" : "" }, undefined, undefined, ctx);
   async function settle() { idle = true; await emit("agent_settled"); }
-  return { ctx, bus, sent, notices, statuses, attention, emit, command, checkpoint, settle, tick: ms => t.mock.timers.tick(ms), setIdle: value => { idle = value; }, setPending: value => { pending = value; }, setEditor: value => { editor = value; }, setSession: value => { session = value; }, setLeaf: value => { leaf = value; } };
+  return { ctx, bus, sent, notices, statuses, emit, command, checkpoint, settle, tick: ms => t.mock.timers.tick(ms), setIdle: value => { idle = value; }, setPending: value => { pending = value; }, setEditor: value => { editor = value; }, setSession: value => { session = value; }, setLeaf: value => { leaf = value; } };
 }
 
 test("loop-status query is session-scoped and observational across working, approval and stopped phases", { skip }, async t => {
@@ -51,12 +49,10 @@ test("loop-status query is session-scoped and observational across working, appr
   await h.command("stop"); assert.equal(query("test"), false); assert.equal(h.sent.length, 1);
 });
 
-test("manual loop: notify once after settlement, feedback stays paused, resume approves one round", { skip }, async t => {
+test("manual loop: pause after settlement, feedback stays paused, resume approves one round", { skip }, async t => {
   const h = await harness(t); await h.command("--manual goal");
   await h.checkpoint();
-  assert.equal(h.attention.length, 0);
   await h.settle(); await h.settle();
-  assert.deepEqual(h.attention.map(x => x.kind), ["loop_approval"]);
   assert.match(h.statuses.get("goal-loop"), /approval required/);
   h.tick(120_000); assert.equal(h.sent.length, 1);
   await h.emit("input", { source: "interactive", text: "Focus on tests next" });
@@ -66,32 +62,34 @@ test("manual loop: notify once after settlement, feedback stays paused, resume a
   h.setPending(false); await h.command("resume"); assert.equal(h.sent.length, 2);
   await h.command("resume"); assert.equal(h.sent.length, 2);
   await h.checkpoint("done");
-  assert.equal(h.attention.length, 1);
   await h.settle(); await h.settle();
-  assert.deepEqual(h.attention.map(x => x.kind), ["loop_approval", "loop_done"]);
+  assert.equal(h.statuses.get("goal-loop"), undefined);
   await h.command("resume"); assert.equal(h.sent.length, 2);
 });
 
-test("abort or subsequent tool work invalidates an unannounced manual completion", { skip }, async t => {
+test("abort or subsequent tool work invalidates an unannounced manual checkpoint", { skip }, async t => {
   const h = await harness(t);
   for (const [name, event] of [
     ["agent_end", { messages: [{ role: "assistant", stopReason: "aborted" }] }],
     ["tool_execution_start", { toolName: "read" }],
     ["tool_execution_end", { toolName: "read", isError: false }],
   ]) {
-    await h.command("--manual goal"); await h.checkpoint("done");
+    const before = h.sent.length;
+    await h.command("--manual goal"); await h.checkpoint("continue");
     await h.emit(name, event); await h.settle();
-    assert.equal(h.attention.at(-1).kind, "loop_stopped");
+    assert.match(h.notices.at(-1), /Agent error or abort|No final checkpoint/);
+    assert.equal(h.statuses.get("goal-loop"), undefined);
+    await h.command("resume"); assert.equal(h.sent.length, before + 1);
   }
 });
 
-test("manual stop and lifecycle cleanup suppress stale approval/completion notices", { skip }, async t => {
+test("manual stop and lifecycle cleanup clear status and refuse resume", { skip }, async t => {
   const h = await harness(t); await h.command("--manual goal"); await h.checkpoint();
   await h.command("stop"); await h.settle(); await h.command("resume");
-  assert.equal(h.sent.length, 1); assert.equal(h.attention.length, 0);
+  assert.equal(h.sent.length, 1); assert.equal(h.statuses.get("goal-loop"), undefined);
   await h.command("--manual other goal"); await h.checkpoint();
   await h.emit("session_shutdown"); await h.settle();
-  assert.equal(h.attention.length, 0);
+  assert.equal(h.statuses.get("goal-loop"), undefined);
 });
 
 test("manual approval survives long waits without losing its session and round limits", { skip }, async t => {
@@ -104,7 +102,6 @@ test("manual approval survives long waits without losing its session and round l
   h.tick(60 * 60_000);
   await h.command("status"); assert.match(h.notices.at(-1), /manual approval, no deadline/);
   assert.match(h.statuses.get("goal-loop"), /approval required/);
-  assert.equal(h.attention.at(-1).kind, "loop_approval");
   await h.command("resume"); assert.equal(h.sent.length, 2);
   await h.checkpoint(); await h.settle(); await h.command("resume");
   assert.equal(h.sent.length, 2);
@@ -145,7 +142,8 @@ test("single-round manual option ends without asking for approval", { skip }, as
   const h = await harness(t); await h.command("--manual --rounds 1 goal");
   await h.checkpoint(); await h.settle(); await h.command("resume");
   assert.equal(h.sent.length, 1);
-  assert.deepEqual(h.attention.map(x => x.kind), ["loop_stopped"]);
+  assert.equal(h.statuses.get("goal-loop"), undefined);
+  assert.match(h.notices.at(-1), /No manual loop awaiting approval/);
 });
 
 test("real loader: explicit start, visible countdown, next round, completion", { skip }, async t => {

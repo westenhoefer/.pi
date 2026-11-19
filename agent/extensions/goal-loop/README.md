@@ -17,11 +17,11 @@ Starting requires a confirmation dialog because it can initiate multiple paid mo
 
 ## Manual approval
 
-`/loop --manual <goal>` starts the first round after confirmation, then pauses after each valid `continue` checkpoint and settlement. The footer shows **approval required**. The [desktop-notification extension](../notifications/README.md) is disabled in this personal configuration; use the shared Switchboard communication guidance for user-facing notices. `/loop resume` approves exactly one next round while Pi is idle. No countdown can resume a manual loop. Normal feedback keeps an awaiting loop paused and invalidates its old next-step hint; the model is instructed not to begin the next loop chunk until approval.
+`/loop --manual <goal>` starts the first round after confirmation, then pauses after each valid `continue` checkpoint and settlement. The footer shows **approval required**. `/loop resume` approves exactly one next round while Pi is idle. No countdown can resume a manual loop. Normal feedback keeps an awaiting loop paused and invalidates its old next-step hint; the model is instructed not to begin the next loop chunk until approval.
 
 The selected round limit (default five) still applies, but **manual loops have no time deadline**, including while waiting for approval. Resume preserves the original goal and round limit; it cannot revive a stopped or replaced-session loop. Completion/blockers still stop the loop rather than becoming resumable. Start a new loop explicitly after resolving a terminal stop. `--manual` and `--delay` are mutually exclusive. No timers or paused approval state survive reload.
 
-No automatic desktop approval/completion alerts are delivered while that extension is disabled. Switchboard notices are agent-driven, never permission to continue or an automatic approval. Send any Switchboard update before the final `loop_checkpoint` so it remains the last tool call.
+Switchboard updates follow the shared `development-workflow` communication guidance: they are agent-driven and never approve another round. Send any Switchboard update before the final `loop_checkpoint` so it remains the last tool call.
 
 ## Steering and stopping
 
@@ -58,19 +58,8 @@ Progress/completion are **model attestations, not independent proof**. Exact rep
 
 ## Design and verification
 
-`loop.ts` owns bounded state transitions and command-option validation. `index.ts` owns Pi lifecycle hooks, the confirmation UI, timer, tool registration, and message dispatch. This adapter still emits fixed-kind attention events, but the disabled desktop-notification extension does not deliver them. Switchboard is used by the agent, not wired to those events. State lives only in the extension instance; the normal Pi conversation records messages/tool results but never restores the loop's armed state.
+`loop.ts` owns bounded state transitions and command-option validation. `index.ts` owns Pi lifecycle hooks, the confirmation UI, timer, tool registration, and message dispatch. State lives only in the extension instance; the normal Pi conversation records messages/tool results but never restores the loop's armed state. The session-owned supervisor communicates through `../simple-subagents/contract.ts`; it does not own loop timers or approval.
 
-The installed pi-subagents package is retained but unloaded. Its goal missions are not used by this loop. The small session-owned supervisor communicates through the contract in `../simple-subagents/contract.ts`; it does not own loop timers or approval.
-
-From the `~/.pi` repository:
-
-```bash
-# Policy tests; loader integration tests explicitly skip without PI_TEST_PACKAGE_DIR.
-node --test agent/extensions/goal-loop/test/*.test.mjs
-
-# Real Pi loader plus simulated lifecycle, UI, message sink, and clock. No model calls.
-PI_TEST_PACKAGE_DIR='C:/Users/johan/AppData/Roaming/nvm/v26.8.1/node_modules/@earendil-works/pi-coding-agent' \
-PI_OFFLINE=1 node --test agent/extensions/goal-loop/test/*.test.mjs
-```
+Run policy tests directly with `node --test agent/extensions/goal-loop/test/*.test.mjs`, or include real-loader integration tests by setting `PI_TEST_PACKAGE_DIR` and `PI_OFFLINE=1` as shown in the root [`README`](../../../README.md#verification).
 
 Tests cover delay and round-count boundaries, the automatic deadline and unbounded manual waits, checkpoints, failures, steering, typing, manual approval/resume, exact child/run-result correlation, same-round delegated waits, whole-run registration and queued admission, non-final pause notices, duplicate/foreign delivery rejection, all stop-path revocations and parent abort signals, explicit cancellation, lifecycle cleanup, background handoff, and unsafe start rejection. Timers are advanced with Node's mock clock: no minute-long sleeps, filesystem fixtures, or live model usage. Loader integration verifies registration against the installed SDK, not a complete real agent session. After `/reload`, manually check the countdown, steering, and stop behavior with a small read-only goal. Do not use a destructive task for a smoke test.

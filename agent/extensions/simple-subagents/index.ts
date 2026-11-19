@@ -14,7 +14,7 @@ import { registerPanel } from "./panel.ts";
 const textResult = (text: string, details: unknown = {}) => ({ content: [{ type: "text" as const, text }], details });
 const summary = (child: ChildSnapshot) => `${child.id} · ${child.agent} · ${child.state}${child.selection ? ` · ${child.selection.provider}/${child.selection.model} (${child.selection.thinking})` : ""} · ${clean(child.activity, 100).replace(/\s+/g, " ")}`;
 const additionalToolsSchema = Type.Optional(Type.Array(StringEnum(ADDITIONAL_TOOLS), {
-  description: "Add built-in tools to this launch's role defaults. Use [\"bash\"] for child-side git/gh. Tool access does not authorize writes, external actions or bypassing approvals; read-only roles stay read-only.",
+  description: "Add built-in tools to this launch's role defaults (e.g. [\"bash\"] for child-side git/gh). Read-only roles stay read-only.",
 }));
 
 export default function simpleSubagents(pi: ExtensionAPI): void {
@@ -123,10 +123,9 @@ export function registerSimpleSubagents(pi: ExtensionAPI, connect: Connect, opti
     description: "Start one session-owned Pi child and return its exact ID immediately. Roles: worker, scout, reviewer. Shares the user concurrency ceiling (default 5) with all swarms and roles. Fresh task context, current cwd, role defaults plus optional additionalTools (e.g. bash for git/gh). Default deadline 900s, max 3600s. Completion/failure automatically wakes the parent. No nested delegation, detached survival, or automatic restart.",
     promptGuidelines: [
       "Use subagent_start for parallel independent tasks. Give each child a self-contained objective, scope, relevant context and verification expectations; fresh children do not inherit this conversation.",
-      "Select additionalTools on subagent_start or swarm_start when the child needs capabilities beyond role defaults, e.g. [\"bash\"] to gather git/gh evidence in its own context. Keep read-only assignments read-only; tool access is not approval for mutations or external actions.",
+      "Select additionalTools on subagent_start or swarm_start when the child needs capabilities beyond role defaults, e.g. [\"bash\"] to gather git/gh evidence in its own context.",
       "At a dependency barrier, yield for automatic completion messages instead of polling or sleeping. Consume each child's result before dependent work. Successful execution is not independent proof of correctness.",
-      "Children share the working directory, not a filesystem sandbox. Keep one writer per shared scope, preserve unrelated changes, and never bypass approvals or switch execution protocols after a launch/tooling failure.",
-      "Use subagent_steer for running children and subagent_stop for cancellation. Steering is queued, not an immediate tool interrupt. Escape in the parent and /loop stop do not stop children. Reload/session replacement/shutdown do.",
+      "Children share the working directory. Keep one writer per shared scope, and use subagent_steer for running children or subagent_stop for cancellation (Escape and /loop stop do not stop children).",
     ],
     parameters: Type.Object({
       agent: StringEnum(ROLES), task: Type.String({ minLength: 1, maxLength: 16000 }), additionalTools: additionalToolsSchema,

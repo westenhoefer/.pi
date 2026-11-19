@@ -39,10 +39,9 @@ test("Pi discovers the three core skills, not retired entries or references, inc
   }
 });
 
-test("personal extension exclusions remove desktop notification commands, tools and prompt hooks on reload", { skip }, async () => {
+test("personal extension discovery loads active extensions without retired commands or tools on reload", { skip }, async () => {
   const { DefaultResourceLoader, SettingsManager } = await import(pathToFileURL(join(root, "dist/index.js")).href);
   const settings = JSON.parse(await readFile(resolve("agent/settings.json"), "utf8"));
-  // Exercise actual personal exclusions, without loading packages or connecting integrations.
   const loader = new DefaultResourceLoader({ cwd: process.cwd(), agentDir: resolve("agent"),
     settingsManager: SettingsManager.inMemory({ packages: [], extensions: settings.extensions }),
     noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
@@ -51,18 +50,21 @@ test("personal extension exclusions remove desktop notification commands, tools 
     await loader.reload();
     const { extensions, errors } = loader.getExtensions();
     assert.deepEqual(errors, []);
-    assert.ok(extensions.some(extension => resolve(extension.path) === resolve("agent/extensions/goal-loop/index.ts")), "Other extensions must remain enabled");
-    assert.ok(!extensions.some(extension => resolve(extension.path) === resolve("agent/extensions/notifications/index.ts")), "Notification prompt hooks must not be loaded");
+    assert.ok(extensions.some(extension => resolve(extension.path) === resolve("agent/extensions/goal-loop/index.ts")), "Active extensions must remain enabled");
     for (const extension of extensions) {
-      assert.equal(extension.commands.has("notify"), false);
-      assert.equal(extension.tools.has("notify_send"), false);
-      assert.equal(extension.tools.has("notify_checkpoint"), false);
+      for (const command of ["notify", "canvas", "deletion-guard"]) assert.equal(extension.commands.has(command), false);
+      for (const tool of ["notify_send", "notify_checkpoint", "diagram_put"]) assert.equal(extension.tools.has(tool), false);
     }
   }
 });
 
-test("relative Markdown links in core skills, references and their READMEs resolve", async () => {
+test("relative Markdown links in core skills, references and READMEs resolve", async () => {
   const files = [resolve("README.md"), resolve("../.agents/README.md")];
+  for (const entry of await readdir(resolve("agent/extensions"), { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const readme = resolve("agent/extensions", entry.name, "README.md");
+    await access(readme).then(() => files.push(readme), () => {});
+  }
   for (const name of coreSkills) {
     const directory = join(sharedSkills, name);
     files.push(...(await readdir(directory, { recursive: true })).filter(file => file.endsWith(".md")).map(file => join(directory, file)));

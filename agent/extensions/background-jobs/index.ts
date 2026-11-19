@@ -83,10 +83,9 @@ export default function backgroundJobs(pi: ExtensionAPI): void {
     description: "Start a session-owned Bash command in the current working directory, returning a job ID immediately. Completion (including failure) automatically resumes the agent via a follow-up message. Not sandboxed; normal approval rules apply. Four concurrent jobs maximum. Default timeout 3600s, maximum 86400s. Keeps only the last 256 KiB of merged stdout/stderr in memory. Stops on session shutdown/reload; not a detached daemon.",
     promptSnippet: "Run long commands without blocking the conversation",
     promptGuidelines: [
-      "Use job_start for authorized long commands while continuing only independent work; do not use it to bypass bash safety or installation approvals.",
-      "job_start completion automatically resumes you via a follow-up message, including failure, timeout, or cancellation. At a dependency barrier, return control with a brief waiting update; do not poll or sleep merely to wait. On completion, inspect job_logs and continue only the still-authorized task; do not claim completion before checking the result.",
+      "job_start completion automatically resumes you via a follow-up message, including failure, timeout, or cancellation. At a dependency barrier, return control with a brief waiting update; do not poll or sleep merely to wait. On completion, inspect job_logs and continue only the still-authorized task.",
       "Keep job_start commands in the foreground: no trailing &, daemonization, nohup, or detached children. Use job_status and job_logs for results, and job_stop for cancellation. Escape after launch does not stop background jobs.",
-      "job_start uses Pi's default Bash resolver (Git Bash on Windows), not PowerShell or cmd; it does not apply custom bash overrides or permission hooks registered for bash.",
+      "job_start uses Pi's default Bash resolver (Git Bash on Windows), not PowerShell or cmd; it does not apply custom bash overrides or hooks registered for bash.",
     ],
     parameters: Type.Object({
       command: Type.String({ minLength: 1, maxLength: 8192 }),

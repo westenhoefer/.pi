@@ -9,28 +9,12 @@
   "markdown": {
     "codeBlockIndent": ""
   },
-  "extensions": [
-    "-./extensions/diagram-canvas/index.ts",
-    "-./extensions/notifications/index.ts"
-  ],
   "packages": [
-    {
-      "source": "npm:pi-subagents@0.66.0",
-      "extensions": [],
-      "skills": [],
-      "prompts": [],
-      "themes": []
-    },
     {
       "source": "npm:pi-web-access@0.28.0"
     },
     "npm:pi-cursor-sdk"
   ],
-  "subagents": {
-    "disableBuiltins": true,
-    "defaultExtensions": [],
-    "projectRootResolution": "git-root"
-  },
   "extensionChangelogVersions": {
     "{\"source\":\"npm:pi-web-access@0.28.0\",\"scope\":\"user\"}": "0.28.0",
     "{\"source\":\"npm:pi-cursor-sdk\",\"scope\":\"user\"}": "0.5.26"

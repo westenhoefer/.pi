@@ -5,7 +5,6 @@ import { stripVTControlCharacters } from "node:util";
 import { randomUUID } from "node:crypto";
 import { CHILD_STARTED, COMPLETION_TYPE, START_QUERY, RUN_REGISTER, RUN_QUERY, RUN_REVOKED, RUN_NOTICE, SWARM_COMPLETION_TYPE, LOOP_STATUS_QUERY, type LoopStatusQuery, type RunClaim, type SwarmDelivery, type ChildStarted, type CompletionDetails, type StartQuery } from "../simple-subagents/contract.ts";
 import { GoalLoop, continuationPrompt, parseLoopStart } from "./loop.ts";
-import { ATTENTION_EVENT, type AttentionRequest } from "../notifications/contract.ts";
 
 const TYPE = "goal-loop";
 const safe = (value: string) => stripVTControlCharacters(value).replace(/[\x00-\x1f\x7f]/g, " ").slice(0, 240);
@@ -21,23 +20,8 @@ export default function goalLoopExtension(pi: ExtensionAPI): void {
   let generation = 0;
   let starting = false;
   let countdownLeaf: string | null | undefined;
-  let attentionKey = "";
   let loopId: string | undefined;
   let currentContext: ExtensionContext | undefined;
-
-  function announceState(ctx: ExtensionContext): void {
-    const state = loop.state;
-    if (!state?.manual || sessionId !== ctx.sessionManager.getSessionId() || !["awaiting_approval", "stopped"].includes(state.phase)) return;
-    const key = `${state.round}:${state.phase}`;
-    if (key === attentionKey) return;
-    attentionKey = key;
-    const request: AttentionRequest = {
-      sessionId: ctx.sessionManager.getSessionId(),
-      kind: state.phase === "awaiting_approval" ? "loop_approval"
-        : state.checkpoint?.outcome === "done" ? "loop_done" : "loop_stopped",
-    };
-    pi.events.emit(ATTENTION_EVENT, request);
-  }
 
   function clearTimer(): void {
     if (timer) clearInterval(timer);
@@ -58,14 +42,12 @@ export default function goalLoopExtension(pi: ExtensionAPI): void {
     ctx.ui.setStatus(TYPE, `Loop ${state.round}/${state.maxRounds} · ${suffix} · /loop stop`);
   }
 
-  function stop(reason: string, ctx: ExtensionContext, silent = false): void {
+  function stop(reason: string, ctx: ExtensionContext): void {
     const active = loop.state && loop.state.phase !== "stopped";
     generation++;
     // An abort, prompt, or other interruption overrides an unannounced completion.
     if (loop.state) loop.state.checkpoint = undefined;
     loop.stop(reason);
-    if (silent && loop.state) attentionKey = `${loop.state.round}:stopped`;
-    else if (ctx.isIdle()) announceState(ctx);
     render(ctx);
     if (active) ctx.ui.notify(`Loop stopped: ${safe(reason)}`, "info");
   }
@@ -81,12 +63,11 @@ export default function goalLoopExtension(pi: ExtensionAPI): void {
   }
 
   function tick(ctx: ExtensionContext): void {
-    if (sessionId !== ctx.sessionManager.getSessionId()) return stop("Session changed.", ctx, true);
+    if (sessionId !== ctx.sessionManager.getSessionId()) return stop("Session changed.", ctx);
     const state = loop.state;
     if (!state || state.phase === "stopped") return render(ctx);
     if (loop.expired(Date.now())) {
       ctx.ui.notify(`Loop stopped: ${loop.state!.reason}`, "info");
-      if (ctx.isIdle()) announceState(ctx);
       return render(ctx);
     }
     if (state.phase === "countdown") {
@@ -110,13 +91,13 @@ export default function goalLoopExtension(pi: ExtensionAPI): void {
       currentContext = ctx;
       const command = args.trim();
       if (command === "stop") {
-        stop("Stopped by user. In-flight work is not aborted; use Escape if needed.", ctx, true);
+        stop("Stopped by user. In-flight work is not aborted; use Escape if needed.", ctx);
         return;
       }
       if (command === "resume") {
         if (ctx.mode !== "tui" || !ctx.isIdle() || ctx.hasPendingMessages()) return ctx.ui.notify("Wait for Pi to settle before approving another round.", "warning");
         if (sessionId !== ctx.sessionManager.getSessionId()) {
-          stop("Session changed; start a new loop explicitly.", ctx, true);
+          stop("Session changed; start a new loop explicitly.", ctx);
           return ctx.ui.notify("No manual loop awaiting approval in this session.", "warning");
         }
         if (!loop.resume(Date.now())) {
@@ -152,8 +133,6 @@ export default function goalLoopExtension(pi: ExtensionAPI): void {
       loop.start(goal, Date.now(), delayMs, manual, rounds);
       loopId = randomUUID();
       runs.clear(); notices.clear();
-      attentionKey = "";
-      pi.events.emit("goal-loop:started", { sessionId });
       timer = setInterval(() => tick(ctx), 1000);
       timer.unref();
       render(ctx);
@@ -192,10 +171,7 @@ export default function goalLoopExtension(pi: ExtensionAPI): void {
   });
   pi.on("user_bash", (_event, ctx) => { stop("User shell command takes precedence.", ctx); });
   pi.on("ui_prompt_start", (_event, ctx) => {
-    if (!starting) {
-      stop("User decision requested; restart explicitly when resolved.", ctx);
-      announceState(ctx);
-    }
+    if (!starting) stop("User decision requested; restart explicitly when resolved.", ctx);
   });
   pi.on("message_start", (event, ctx) => {
     const message = event.message;
@@ -231,16 +207,15 @@ export default function goalLoopExtension(pi: ExtensionAPI): void {
     loop.settled(Date.now());
     if (wasWorking && loop.state?.phase === "countdown") countdownLeaf = ctx.sessionManager.getLeafId();
     if (wasWorking && loop.state?.phase === "stopped") ctx.ui.notify(`Loop stopped: ${safe(loop.state.reason ?? "Stopped")}`, "info");
-    announceState(ctx);
     render(ctx);
   });
   pi.on("session_before_compact", (_event, ctx) => { stop("Compaction; restart explicitly after context recovery.", ctx); });
-  pi.on("session_before_tree", (_event, ctx) => { stop("Session tree navigation.", ctx, true); });
+  pi.on("session_before_tree", (_event, ctx) => { stop("Session tree navigation.", ctx); });
   pi.on("session_start", (_event, ctx) => {
     currentContext = ctx;
-    if (sessionId && sessionId !== ctx.sessionManager.getSessionId()) stop("Session changed.", ctx, true);
+    if (sessionId && sessionId !== ctx.sessionManager.getSessionId()) stop("Session changed.", ctx);
   });
-  pi.on("session_shutdown", (_event, ctx) => { stop("Session shutdown/reload.", ctx, true); });
+  pi.on("session_shutdown", (_event, ctx) => { stop("Session shutdown/reload.", ctx); });
 
   pi.events.on(LOOP_STATUS_QUERY, data => {
     const query = data as LoopStatusQuery;
@@ -280,10 +255,5 @@ export default function goalLoopExtension(pi: ExtensionAPI): void {
   pi.events.on(RUN_NOTICE, data => {
     const delivery = data as SwarmDelivery;
     if (delivery.sessionId === sessionId && delivery.loopId === loopId && delivery.round === loop.state?.round && runs.get(delivery.id) === delivery.round && loop.state?.phase !== "stopped") notices.set(delivery.deliveryId, { ...delivery });
-  });
-
-  pi.events.on("goal-loop:query", (data) => {
-    const query = data as { active?: boolean };
-    query.active = !!loop.state && loop.state.phase !== "stopped";
   });
 }

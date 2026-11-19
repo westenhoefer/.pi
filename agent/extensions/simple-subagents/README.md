@@ -1,6 +1,6 @@
 # Session-owned subagents and swarms
 
-A parent-TUI supervisor around fresh non-interactive Pi RPC children, with a durable fixed-batch queue. Auto-discovered on `/reload`. The installed legacy `pi-subagents` package remains disabled: do not enable two supervisors together.
+A parent-TUI supervisor around fresh non-interactive Pi RPC children, with a durable fixed-batch queue. Auto-discovered on `/reload`.
 
 ## Tools
 
@@ -79,7 +79,7 @@ Cursor is supplied by the installed `pi-cursor-sdk` package, not Pi's built-in p
 
 The launcher now passes a private selected-provider hint to the child runtime, including per-panel-member overrides and pinned queued selections. For **Cursor-selected children only**, `child-runtime.ts` explicitly loads `npm/node_modules/pi-cursor-sdk/dist/index.js` from the active agent directory through `cursor-child.ts`. Other children do not load it, and no role defaults, settings, packages or installed provider files are changed. Cursor role pins should use a qualified `cursor/model-id` so the bootstrap can identify the provider; do not also list the same Cursor entry in role extensions.
 
-Cursor's native tools are independent of Pi's `--tools`. The child bootstrap forces **local runtime**, `PI_CURSOR_NATIVE_TOOLS=0`, `PI_CURSOR_SETTING_SOURCES=none`, and enables the Pi bridge with built-in tool exposure. Thus Cursor uses the existing role's active Pi tools, not a second native shell/edit/delegation toolset or ambient Cursor MCP servers. Pi instructions/skills remain inherited. Durable Cursor resume and forced recovery are disabled in these fresh fileless children. These controls are child-process-only and do not modify the parent or user configuration; they depend on the installed provider's supported MCP-only contract (verified against 0.5.29), not an OS sandbox.
+Cursor's native tools are independent of Pi's `--tools`. The child bootstrap forces **local runtime**, `PI_CURSOR_NATIVE_TOOLS=0`, `PI_CURSOR_SETTING_SOURCES=none`, and enables the Pi bridge with built-in tool exposure. Thus Cursor uses the existing role's active Pi tools, not a second native shell/edit/delegation toolset or ambient Cursor MCP servers. Pi instructions/skills remain inherited. Durable Cursor resume and forced recovery are disabled in these fresh fileless children. These controls are child-process-only and do not modify the parent or user configuration; they depend on the installed provider's supported MCP-only contract, not an OS sandbox.
 
 Cursor SDK fileless stores normally create/remove system-temp directories. The bootstrap instead points `TMPDIR`, `TEMP` and `TMP` at `<agent-dir>/simple-subagents/cursor-tmp`, refusing linked/non-directory components. The SDK owns each private per-run subdirectory; the bootstrap does not sweep or remove existing files. The user's approval for the default installation covers normal cleanup of **child-owned files/directories under `C:\Users\johan\.pi\agent\simple-subagents\cursor-tmp`**, including future Cursor children, plus the provider's normal deletion of its own valid regular-file catalog cache at **`C:\Users\johan\.pi\agent\cursor-sdk-model-list.json`** when credentials are absent, including from other working repositories. This does not authorize deleting credentials, settings, persistent agent stores or other temp paths.
 
@@ -168,13 +168,8 @@ Every loop stop path (including terminal checkpoints, failures, missing checkpoi
 
 ## Offline verification
 
-From `C:/Users/johan/.pi`, using installed Node and Pi (no downloads):
+Set `PI_TEST_PACKAGE_DIR` and `PI_OFFLINE=1` as shown in the root [`README`](../../../README.md#verification), then run `node --test agent/extensions/simple-subagents/test/*.test.mjs` from `C:\Users\johan\.pi`.
 
-```bash
-PI_TEST_PACKAGE_DIR='C:/Users/johan/AppData/Roaming/nvm/v26.8.1/node_modules/@earendil-works/pi-coding-agent' \
-PI_OFFLINE=1 node --test agent/extensions/simple-subagents/test/*.test.mjs agent/extensions/goal-loop/test/*.test.mjs agent/extensions/notifications/test/*.test.mjs
-```
-
-When running this command from inside a leaf RPC child, prefix `PI_SIMPLE_SUBAGENT=0` for the **test process only** so the parent-loader fixture is not intentionally disabled by the inherited leaf marker. The actual child-recursion test sets and verifies the marker separately. Without `PI_TEST_PACKAGE_DIR`, real-loader/SDK cases explicitly skip.
+When running from inside a leaf RPC child, also set `PI_SIMPLE_SUBAGENT=0` for the **test process only** so the parent-loader fixture is not skipped by the inherited leaf marker. The child-recursion test sets and verifies the marker separately. Without `PI_TEST_PACKAGE_DIR`, real-loader/SDK cases explicitly skip.
 
 Tests use injected agent directories and fake child transports/mock clocks. Panel cases cover mixed-model dispatch, exact selection validation, shared capacity and loop ownership, identical independent briefs, cancellation, pinned queued-model recovery, branch-local synthesis, unchanged original answers, truncation/failures, snapshot refresh and tabbed Unicode/narrow-terminal rendering. A repository-local subprocess fixture reproduces competing stale-snapshot recovery with explicit refusal/exit handling, and awaits all child exits before fixture cleanup. New fixture directories and cleanup stay inside `simple-subagents/test/`; no personal settings or personal run records are created. Coverage includes >20 tasks, shared startup/teardown capacity, CSV validation/round-trip, durable recovery, parent abort/loop revocation, coalesced delivery, honest evidence/usage and existing direct behavior. Existing RPC fixtures also check local subprocess framing and installed Pi startup/state/EOF shutdown without a model call. These checks are not a paid live-model smoke test or a cross-platform process-tree proof.

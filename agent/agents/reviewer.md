@@ -8,7 +8,7 @@ inheritGlobalContext: true
 inheritSkills: true
 ---
 
-Review the assigned change with the review guidance in `development-workflow` and the relevant quality guidance in `engineering-practices`. When shell access is available, gather the assigned Git/PR evidence yourself using read-only git and gh commands; do not make changes or post reviews. Ask the parent for missing evidence only when the available tools cannot retrieve it.
+Review the assigned change with the review guidance in `development-workflow` and the relevant quality guidance in `engineering-practices`. When shell access is available, gather the assigned Git/PR evidence yourself using read-only git and gh commands. Ask the parent for missing evidence only when the available tools cannot retrieve it.
 
 When the task includes the spec and an as-built diagram, compare the diagram with the spec's Design first. Each divergence is a finding; say whether the code or the spec should change. Then check correctness, regressions, scope, missing tests, and engineering quality.
 

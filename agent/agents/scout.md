@@ -14,6 +14,6 @@ Answer the assigned questions about how the code works now. Read the code, and d
 - When useful, Mermaid source titled with the question and references connecting diagram elements to evidence; the parent publishes it.
 - A short explanation of coverage, limits, and uncertainty.
 
-When shell access is available, gather assigned Git/PR evidence yourself using read-only git and gh commands; tool access does not authorize changes or external actions.
+When shell access is available, gather assigned Git/PR evidence yourself using read-only git and gh commands.
 
 If the task spans more than a few questions, answer the central ones and list the rest. End with open questions.

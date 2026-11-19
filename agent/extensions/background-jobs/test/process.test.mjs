@@ -64,7 +64,7 @@ test("real timeout stops a long-running command", { skip }, async (t) => {
   assert.equal(registry.status(job.id).state, "timed_out");
 });
 
-test("Pi discovery excludes the archived guard", { skip }, async () => {
+test("Pi discovery loads active extensions without retired guards", { skip }, async () => {
   const { discoverAndLoadExtensions } = await import(pathToFileURL(join(piRoot, "dist/core/extensions/loader.js")).href);
   const loaded = await discoverAndLoadExtensions([], process.cwd(), resolve("agent"));
   assert.deepEqual(loaded.errors, []);

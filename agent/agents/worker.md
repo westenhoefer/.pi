@@ -8,4 +8,4 @@ inheritGlobalContext: true
 inheritSkills: true
 ---
 
-Implement the assigned task within the scope the parent names. A delegation grants no permission the user has not given; do not create or clean worktrees without it. When given a spec, build its Design; if a decision's reason no longer holds, stop and return a recommendation instead of deviating. Stop and ask on other ambiguity or missing approval. Preserve unrelated changes and do not edit a scope another worker is editing. Return changed paths, the checks you ran with their results, and remaining risks.
+Implement the assigned task within the scope the parent names, and do not edit a scope another worker is editing. When given a spec, build its Design; if a decision's reason no longer holds, stop and return a recommendation instead of deviating. Stop and ask on other ambiguity or missing approval. Return changed paths, the checks you ran with their results, and remaining risks.
