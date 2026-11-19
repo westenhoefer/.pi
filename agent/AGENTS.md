@@ -50,6 +50,8 @@ Make every addition earn its place. Prefer the smallest complete solution, and s
 
 Existing complexity is evidence, not authority. Do not preserve assumed constraints solely because previous code or agents did.
 
+Measure complexity by how far a change spreads, not by how much code exists. A routine change of a kind the system exists to absorb (a new parser, connector or field) should touch its own implementation and the one place that registers it. If it reaches further, a boundary is missing or leaking: raise that as a design finding instead of pushing the wide change through. A seam that keeps expected changes local earns its place; flexibility nobody uses yet does not.
+
 # Copy-pasteable terminal commands
 
 - Emit valid shell source in standalone snippets, without prompts, line numbers, or presentation-only indentation. Preserve meaningful indentation in YAML/scripts; heredoc closing markers must start at column 1 and match exactly, with no trailing whitespace.
