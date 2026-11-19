@@ -20,6 +20,7 @@ These are behavioral instructions, not a sandbox or a per-command permission sys
 ## Git and external actions
 
 - Do not commit, push, publish, deploy, create PRs, or trigger external review services unless the user requested those actions. An implementation request alone does not authorize them.
+- Follow-up work on a branch with an open PR is the exception: committing and pushing to that branch are part of the task, because the PR is where the work gets reviewed. This covers that branch only; the rule below still applies.
 - Do not force-push, rewrite history, discard unrelated changes, or merge without explicit approval for that operation.
 - Do not read or print credential stores, private keys, or tokens unless needed for an explicitly authorized task. Never include secrets in logs, commits, or shared output.
 
@@ -40,13 +41,21 @@ Apply the minimum correction and run focused, non-mutating verification where av
 
 If any condition fails, stop before mutation, explain the specific decision or permission needed, and recommend a next step. Do not invent alternatives. Pass these same limits to delegated agents.
 
+# Failed fixes
+
+A fix that does not resolve the problem, or that only changes its form, shows the cause was not understood. After the second such attempt at the same problem, stop making changes. Do not try a third variant.
+
+Go back to the original task and the first observed failure. List what the attempts took for granted without checking (a constraint, an ownership boundary, how a component behaves) and verify the one they share with a read-only check.
+
+Continue alone only if that yields a verified cause whose fix stays inside the task. Otherwise report: the goal, what was tried and observed, the assumption in doubt, and the decision or information needed. Also report before any fix that works around a constraint rather than satisfying it, or that reaches outside the task's scope to make an earlier fix hold. A delegated agent reports to its parent.
+
 # Communication
 
 At significant progress, human-input boundaries, and task completion, follow the `development-workflow` skill's Communication guidance and the `agent-tools` Switchboard protocol. Treat its completion notice as part of finishing: a chat summary alone is not sufficient when Switchboard is available, because the user may be waiting elsewhere.
 
 # Universal principles
 
-Make every addition earn its place. Prefer the smallest complete solution, and spend reasoning on reducing unnecessary substance—not necessary guarantees.
+Make every addition earn its place. Prefer the smallest complete solution, and spend reasoning on reducing unnecessary substance - not necessary guarantees.
 
 Existing complexity is evidence, not authority. Do not preserve assumed constraints solely because previous code or agents did.
 
@@ -56,5 +65,4 @@ Measure complexity by how far a change spreads, not by how much code exists. A r
 
 - Emit valid shell source in standalone snippets, without prompts, line numbers, or presentation-only indentation. Preserve meaningful indentation in YAML/scripts; heredoc closing markers must start at column 1 and match exactly, with no trailing whitespace.
 - Multiline commands and heredocs are allowed. Do not force single-line commands or create separate files merely to avoid multiline formatting.
-- These rules govern generated source, not Pi's rendered margins. Display padding is controlled by Pi settings; do not claim the agent can remove it or alter valid command syntax to compensate for it.
 - Match the user's actual interactive shell and state the required working directory. Do not assume Pi's Bash tool shell is also the shell the user will paste into.
