@@ -2,9 +2,9 @@
   "lastChangelogVersion": "1.5.2",
   "theme": "light",
   "defaultProvider": "openai-codex",
-  "defaultModel": "gpt-6.1-sol",
+  "defaultModel": "gpt-6.2-sol",
   "defaultThinkingLevel": "high",
-  "hideThinkingBlock": false,
+  "hideThinkingBlock": true,
   "outputPad": 0,
   "markdown": {
     "codeBlockIndent": ""
@@ -17,6 +17,6 @@
   ],
   "extensionChangelogVersions": {
     "{\"source\":\"npm:pi-web-access@0.28.0\",\"scope\":\"user\"}": "0.28.0",
-    "{\"source\":\"npm:pi-cursor-sdk\",\"scope\":\"user\"}": "0.5.26"
+    "{\"source\":\"npm:pi-cursor-sdk\",\"scope\":\"user\"}": "0.5.42"
   }
 }
