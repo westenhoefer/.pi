@@ -19,39 +19,22 @@ These are behavioral instructions, not a sandbox or a per-command permission sys
 
 ## Git and external actions
 
-- Do not commit, push, publish, deploy, create PRs, or trigger external review services unless the user requested those actions. An implementation request alone does not authorize them.
-- Follow-up work on a branch with an open PR is the exception: committing and pushing to that branch are part of the task, because the PR is where the work gets reviewed. This covers that branch only; the rule below still applies.
+- Follow `development-workflow` for product issue tracking in Linear and delivery by PR; both are authorized. Opening a PR never needs a separate request. Ask before committing or pushing except on the task branch for a requested product implementation or open-PR follow-up.
+- Other publication, deployment, and external review services require a user request.
 - Do not force-push, rewrite history, discard unrelated changes, or merge without explicit approval for that operation.
 - Do not read or print credential stores, private keys, or tokens unless needed for an explicitly authorized task. Never include secrets in logs, commits, or shared output.
 
 When asking for approval, state the exact target, intended operation, and why it is needed. If uncertain, stop rather than broaden scope or bypass a restriction.
 
-# Issue investigation and repair
+# Investigations and repairs
 
-An issue-focused request to investigate or debug includes permission to apply a narrowly scoped mechanical repair, not just report it. Explicit requests for read-only investigation, explanation only, or a plan take precedence.
+An investigation authorizes a small, local, reversible repair only when evidence establishes the cause and one required correction under an existing contract or agreed intent. Read-only, explanation-only and plan requests take precedence. Stop before editing if a decision or permission is missing. An explicitly identified external config or installed manifest may be in scope; its neighbors are not. All safety limits above still apply.
 
-Auto-apply only when all of these hold:
-
-- Evidence establishes both the cause and one required correction under an existing diagnostic, documented contract, or already agreed intent. Having a preferred solution is not the same as having no material decision to make.
-- The change is small, local, reversible, and restores intended behavior without choosing new product behavior, architecture, ownership, public contracts, dependency versions, or migration policy.
-- The target is in the requested scope. A particular local configuration file or installed-package manifest identified by the request is in scope even outside the active repository; this does not authorize edits to neighboring files or other installations. If the target or boundary is unclear, ask.
-- The repair and its verification comply with the personal safety rules above. This permission does not authorize package installation, upgrades, removals, destructive operations, machine-wide configuration changes, or external actions that otherwise require explicit approval.
-
-Apply the minimum correction and run focused, non-mutating verification where available. Report what changed, the evidence for it, what was actually verified, and any durability limitation (for example, an installed-file patch may be overwritten by reinstalling). Do not suppress a warning instead of fixing its cause, add unrelated cleanup, or introduce compensating abstractions.
-
-If any condition fails, stop before mutation, explain the specific decision or permission needed, and recommend a next step. Do not invent alternatives. Pass these same limits to delegated agents.
-
-# Failed fixes
-
-A fix that does not resolve the problem, or that only changes its form, shows the cause was not understood. After the second such attempt at the same problem, stop making changes. Do not try a third variant.
-
-Go back to the original task and the first observed failure. List what the attempts took for granted without checking (a constraint, an ownership boundary, how a component behaves) and verify the one they share with a read-only check.
-
-Continue alone only if that yields a verified cause whose fix stays inside the task. Otherwise report: the goal, what was tried and observed, the assumption in doubt, and the decision or information needed. Also report before any fix that works around a constraint rather than satisfying it, or that reaches outside the task's scope to make an earlier fix hold. A delegated agent reports to its parent.
+After two unsuccessful fixes, stop editing. Follow `development-workflow`’s investigation guidance for diagnosis, verification and recovery before trying again.
 
 # Communication
 
-At significant progress, human-input boundaries, and task completion, follow the `development-workflow` skill's Communication guidance and the `agent-tools` Switchboard protocol. Treat its completion notice as part of finishing: a chat summary alone is not sufficient when Switchboard is available, because the user may be waiting elsewhere.
+Follow `development-workflow` for progress, questions and completion notices.
 
 In design discussions, assume I’m comfortable with math and CS terminology. Use a precise term, invariant, signature, or counterexample when it makes a choice clearer. State the assumption it depends on and what it changes in the design. If plain language is just as precise, use it.
 

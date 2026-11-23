@@ -54,6 +54,15 @@ export async function loadProfile(agentDir: string, name: string, parse: Parser,
   };
 }
 
+const LINEAR_TOOLS = ["get_issue", "list_issues", "save_issue", "list_comments", "save_comment", "list_issue_statuses", "list_projects", "get_project", "list_teams"].map(name => `mcp__linear__${name}`);
+
+export function withLinear(profile: Profile): Profile {
+  if (profile.name !== "worker") throw new Error("linear: true is supported only for a single worker launch.");
+  // A role wildcard or MCP selector must not widen the fixed --tools allowlist once MCP is loaded.
+  if (profile.tools.some(tool => !(ADDITIONAL_TOOLS as readonly string[]).includes(tool))) throw new Error("linear: true requires a worker profile with built-in leaf tools only.");
+  return { ...profile, tools: [...profile.tools, "codemode", ...LINEAR_TOOLS], extensions: [...profile.extensions, "builtin:mcp", "builtin:codemode"] };
+}
+
 export function buildLaunch(profile: Profile, options: {
   packageDir: string; childRuntime: string; executable: string; cwd: string; trusted: boolean;
   provider: string; model: string; thinking: string; env: NodeJS.ProcessEnv; selection?: ModelSelection;

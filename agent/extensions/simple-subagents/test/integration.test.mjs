@@ -242,6 +242,46 @@ test("both real-loaded extensions coordinate parallel completion wakes and manua
   await h.command("resume"); assert.match(h.statuses.get("goal-loop"), /Loop 2\/5/);
 });
 
+test("only an opted-in direct worker launches with the fixed Linear allowlist and explicit built-ins", { skip }, async t => {
+  const h = await harness(t);
+  const tools = h.loaded.extensions.find(extension => extension.tools.has("subagent_start")).tools;
+  const parameters = name => tools.get(name).definition.parameters;
+  assert.equal(parameters("subagent_start").properties.linear.type, "boolean");
+  assert.ok(!parameters("subagent_start").required.includes("linear"));
+  for (const name of ["swarm_start", "panel_start"]) assert.equal(parameters(name).properties.linear, undefined);
+  const start = options => h.call("subagent_start", { agent: "worker", task: "Inspect issue; no writes.", ...options });
+  for (const agent of ["scout", "reviewer"]) await assert.rejects(start({ agent, linear: true }), /single worker/);
+  for (const name of ["codemode", "mcp__linear__save_issue", "mcp__linear__*"]) await assert.rejects(start({ additionalTools: [name] }), /additionalTools/);
+  assert.equal(h.children().length, 0);
+
+  const result = await start({ linear: true, additionalTools: ["bash"] });
+  await flush();
+  const enabled = h.children()[0];
+  const expected = ["read", "grep", "find", "ls", "bash", "codemode", "mcp__linear__get_issue", "mcp__linear__list_issues", "mcp__linear__save_issue",
+    "mcp__linear__list_comments", "mcp__linear__save_comment", "mcp__linear__list_issue_statuses", "mcp__linear__list_projects", "mcp__linear__get_project", "mcp__linear__list_teams"];
+  assert.deepEqual(result.details.tools, expected);
+  assert.equal(flag(enabled, "--tools"), expected.join(","));
+  const extensions = child => child.launch.args.filter((_, i, args) => args[i - 1] === "--extension");
+  const runtime = resolve("agent/extensions/simple-subagents/child-runtime.ts");
+  assert.deepEqual(extensions(enabled), ["builtin:mcp", "builtin:codemode", runtime]);
+  assert.ok(enabled.launch.args.includes("--no-extensions")); assert.ok(enabled.launch.args.includes("--no-approve"));
+
+  for (const options of [{}, { linear: false }, { agent: "scout" }, { agent: "reviewer" }]) {
+    await start(options); await flush();
+    const child = h.children().at(-1);
+    assert.equal(flag(child, "--tools"), "read,grep,find,ls");
+    assert.deepEqual(extensions(child), [runtime]);
+    assert.ok(child.launch.args.includes("--no-extensions"));
+  }
+});
+
+test("Linear opt-in cannot activate broader MCP selectors from the role file", { skip }, async t => {
+  const h = await harness(t);
+  await writeFile(join(h.agentDir, "agents", "worker.md"), "---\ntools: read, mcp__linear__*\n---\nLeaf worker");
+  await assert.rejects(h.call("subagent_start", { agent: "worker", task: "Read issue", linear: true }), /built-in leaf tools only/);
+  assert.equal(h.children().length, 0);
+});
+
 test("parent opts scouts and reviewers into shell access per direct launch, with unchanged defaults", { skip }, async t => {
   const h = await harness(t);
   for (const [index, agent, additionalTools] of [[0, "scout", undefined], [1, "scout", ["bash"]], [2, "reviewer", ["bash", "read", "bash"]]]) {

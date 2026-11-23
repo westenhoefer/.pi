@@ -6,7 +6,7 @@ A parent-TUI supervisor around fresh non-interactive Pi RPC children, with a dur
 
 Existing direct tools remain available:
 
-- `subagent_start({ agent, task, model?, thinking?, additionalTools?, timeoutSeconds? })`: reserve one child and return its exact ID. Optional `model` is an exact authenticated `provider/model` ID and overrides the role/parent for this child only; `thinking` defaults to the parent level and is clamped by the child. Registration is not task success.
+- `subagent_start({ agent, task, model?, thinking?, additionalTools?, linear?, timeoutSeconds? })`: reserve one child and return its exact ID. Optional `model` is an exact authenticated `provider/model` ID and overrides the role/parent for this child only; `thinking` defaults to the parent level and is clamped by the child. Registration is not task success.
 - `subagent_status({ id? })`: list live/recent direct children, or read one retained report.
 - `subagent_steer({ id, message })`: queue guidance at a child tool-turn boundary; never restarts settled work.
 - `subagent_stop({ id })`: request termination; `stopping` means cleanup is unconfirmed.
@@ -98,6 +98,8 @@ subagent_start({
 ```
 
 `swarm_start` accepts the same field for every member. Additions are merged with role defaults and deduplicated; omission or `[]` leaves defaults unchanged. Supported additions: `read`, `grep`, `find`, `ls`, `edit`, `write`, `bash`, `powershell`. `git` and `gh` are CLI commands run through `bash` (or `powershell`), not separate Pi tools; they must already be installed/authenticated. Unknown names, launchers, arbitrary extensions and MCP tools cannot be added through this field.
+
+For one worker, use `subagent_start({ agent: "worker", linear: true, task: "Read ENG-123 and summarize its comments. Do not write to Linear." })`. This loads Pi's built-in MCP and codemode with a fixed Linear tool list: issue, comment, status, project and team lookups, plus `save_issue` and `save_comment`. Pi may connect other configured MCP servers, but their tools are not on the allowlist. The worker profile must use built-in leaf tools. Accessible projects are determined by the authenticated Linear account, not the checkout; name the intended project or issue and any authorized writes in the task. Omitting `linear` keeps the default; scouts, reviewers, swarms and panels do not support this opt-in.
 
 The start result reports the resolved `tools`; swarm status also reports them. Swarms persist the resolved profile, so queued dispatch and explicit resume retain that tool selection even if role files later change. Role files and unrelated launches are not modified. This is launch-time selection, not a live capability escalation through steering or task/CSV text.
 

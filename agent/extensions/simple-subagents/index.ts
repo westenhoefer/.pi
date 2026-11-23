@@ -3,7 +3,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { fileURLToPath } from "node:url";
 import { CHILD_STARTED, COMPLETION_TYPE, START_QUERY, RUN_REGISTER, RUN_QUERY, RUN_REVOKED, RUN_NOTICE, SWARM_COMPLETION_TYPE, type RunRevoked, type StartQuery } from "./contract.ts";
-import { ADDITIONAL_TOOLS, buildLaunch, loadProfile, resolveSelection, ROLES, THINKING_LEVELS } from "./launch.ts";
+import { ADDITIONAL_TOOLS, buildLaunch, loadProfile, resolveSelection, ROLES, THINKING_LEVELS, withLinear } from "./launch.ts";
 import { RpcProcess, type Connect } from "./rpc.ts";
 import { active, clean, Supervisor, type ChildSnapshot } from "./supervisor.ts";
 import { loadManifest } from "./manifest.ts";
@@ -129,6 +129,7 @@ export function registerSimpleSubagents(pi: ExtensionAPI, connect: Connect, opti
     ],
     parameters: Type.Object({
       agent: StringEnum(ROLES), task: Type.String({ minLength: 1, maxLength: 16000 }), additionalTools: additionalToolsSchema,
+      linear: Type.Optional(Type.Boolean({ description: "Single worker only: enable scoped Linear issue, comment and project tools for this launch. Does not authorize writes." })),
       model: Type.Optional(Type.String({ minLength: 1, description: "Exact authenticated provider/model ID. Overrides role/parent selection for this child only." })),
       thinking: Type.Optional(StringEnum(THINKING_LEVELS)),
       timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 3600 })),
@@ -138,7 +139,8 @@ export function registerSimpleSubagents(pi: ExtensionAPI, connect: Connect, opti
       const registry = getSupervisor(ctx);
       const epoch = generation;
       const authority = authorize(ctx);
-      const profile = await loadProfile(agentDir, params.agent, parseFrontmatter, params.additionalTools);
+      const base = await loadProfile(agentDir, params.agent, parseFrontmatter, params.additionalTools);
+      const profile = params.linear === true ? withLinear(base) : base;
       signal?.throwIfAborted();
       ctx.signal?.throwIfAborted();
       if (epoch !== generation || shuttingDown) throw new Error("Session changed during launch preparation.");
