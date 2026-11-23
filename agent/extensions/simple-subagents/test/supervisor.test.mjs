@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { join } from "node:path";
 import { test } from "node:test";
 import { Supervisor } from "../supervisor.ts";
 
@@ -7,8 +8,9 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
 function harness(options = {}) {
   const connections = [], completed = [], started = [];
   const supervisor = new Supervisor({ sessionId: "parent", onStarted: child => started.push(child), onChange() {}, onComplete: child => completed.push(child), maxConcurrency: 2,
-    connect(_launch, event, exit) {
-      const child = { event, exit, requests: [], closed: false,
+    ...options.supervisor,
+    connect(launch, event, exit) {
+      const child = { launch, event, exit, requests: [], closed: false,
         async request(request) { child.requests.push(request); return options.request ? options.request(request) : { type: "response", success: true }; },
         async close() { child.closed = true; if (options.close) await options.close(); },
       };
@@ -22,6 +24,98 @@ function harness(options = {}) {
   }
   return { supervisor, connections, completed, started, start, finish };
 }
+
+// Supervisor tests use a controlled provisioner: no checkouts or processes are created.
+const worktreeDirectory = join(import.meta.dirname, "worktrees");
+const worktreeBase = "deadbeef".repeat(5);
+const trusted = { ...launch, args: ["--mode", "rpc", "--approve"], env: { GIT_DIR: "elsewhere", Git_Work_Tree: "elsewhere", GIT_INDEX_FILE: "elsewhere", GIT_LFS_SKIP_SMUDGE: "1", GIT_ALLOW_PROTOCOL: "file", KEEP: "value" } };
+const isolated = { agent: "worker", task: "Inspect checkout", launch: trusted, worktreeBase };
+
+test("worktree reservation captures the path before provisioning; only the isolated launch loses cwd trust and Git overrides", async t => {
+  const calls = [], ready = Promise.withResolvers();
+  const h = harness({ supervisor: { worktreeDirectory, provisionWorktree(...args) { calls.push(args); return ready.promise; } } });
+  t.after(() => { ready.resolve(); return h.supervisor.shutdown(); });
+  const first = h.supervisor.start(isolated), second = h.supervisor.start(isolated);
+  assert.notEqual(first.worktreePath, second.worktreePath);
+  assert.deepEqual(h.started.map(child => child.worktreePath), [join(worktreeDirectory, first.id), join(worktreeDirectory, second.id)]);
+  assert.deepEqual(calls, []);
+  await tick();
+  assert.deepEqual(calls, [first, second].map(child => [trusted.cwd, worktreeBase, child.worktreePath]));
+  assert.equal(h.connections.length, 0);
+  ready.resolve(); await tick();
+  for (const [index, child] of [first, second].entries()) {
+    const connected = h.connections[index];
+    assert.equal(connected.launch.cwd, child.worktreePath);
+    assert.deepEqual(connected.launch.args, ["--mode", "rpc", "--no-approve"]);
+    assert.deepEqual(connected.launch.env, { GIT_LFS_SKIP_SMUDGE: "1", GIT_ALLOW_PROTOCOL: "file", KEEP: "value" });
+    assert.equal(connected.requests.at(-1).type, "prompt");
+  }
+  h.finish(0); await tick();
+  assert.equal(h.completed[0].worktreePath, first.worktreePath);
+  const ordinary = h.supervisor.start({ ...isolated, worktreeBase: undefined }); await tick();
+  assert.equal(ordinary.worktreePath, undefined);
+  assert.equal(h.connections[2].launch.cwd, ".");
+  assert.ok(h.connections[2].launch.args.includes("--approve"));
+  assert.equal(h.connections[2].launch.env.GIT_DIR, "elsewhere");
+  assert.equal(calls.length, 2);
+});
+
+test("missing worktree directory and rejected reservations never provision; preparation failure never falls back", async () => {
+  let attempts = 0;
+  const provisionWorktree = async () => { attempts++; throw new Error("checkout refused"); };
+  const unconfigured = harness({ supervisor: { provisionWorktree } });
+  assert.throws(() => unconfigured.supervisor.start(isolated), /absolute worktree directory/);
+  assert.deepEqual(unconfigured.started, []);
+  const rejected = harness({ supervisor: { provisionWorktree, worktreeDirectory, onStarted() { throw new Error("not reserved"); } } });
+  assert.throws(() => rejected.supervisor.start(isolated), /not reserved/);
+  await tick(); assert.equal(attempts, 0); assert.deepEqual(rejected.supervisor.list(), []);
+  const h = harness({ supervisor: { provisionWorktree, worktreeDirectory } });
+  const child = h.supervisor.start(isolated); await tick();
+  assert.equal(attempts, 1); assert.equal(h.connections.length, 0);
+  assert.equal(h.completed[0].state, "failed"); assert.match(h.completed[0].error, /checkout refused/);
+  assert.equal(h.completed[0].worktreePath, child.worktreePath);
+});
+
+for (const reason of ["stop", "timeout", "shutdown"]) {
+  test(`${reason} during checkout holds ownership until Git quiesces and never connects`, async t => {
+    const ready = Promise.withResolvers();
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    let preparing = false;
+    const h = harness({ supervisor: { maxConcurrency: 1, worktreeDirectory, provisionWorktree() { preparing = true; return ready.promise; } } });
+    t.after(() => { ready.resolve(); return h.supervisor.shutdown(); });
+    const child = h.supervisor.start({ ...isolated, timeoutSeconds: 1 });
+    await tick(); assert.ok(preparing);
+    let settled = false, pending;
+    if (reason === "timeout") t.mock.timers.tick(1000);
+    else pending = (reason === "stop" ? h.supervisor.stop(child.id) : h.supervisor.shutdown()).then(() => { settled = true; });
+    await tick(); assert.equal(settled, false);
+    assert.equal(h.supervisor.status(child.id).state, "stopping");
+    assert.equal(h.supervisor.capacity, 0); assert.equal(h.completed.length, 0);
+    if (reason === "stop") ready.reject(new Error("late checkout failure")); else ready.resolve();
+    await pending; await tick();
+    assert.equal(h.supervisor.status(child.id).state, reason === "timeout" ? "timed_out" : "cancelled");
+    assert.equal(h.supervisor.capacity, reason === "shutdown" ? 0 : 1);
+    assert.equal(h.completed.length, reason === "shutdown" ? 0 : 1);
+    assert.equal(h.connections.length, 0);
+  });
+}
+
+test("hung checkout returns an unconfirmed stop without releasing admission or connecting later", async t => {
+  const pending = Promise.withResolvers();
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const h = harness({ supervisor: { worktreeDirectory, provisionWorktree: () => pending.promise } });
+  const child = h.supervisor.start(isolated);
+  await tick();
+  const stopping = h.supervisor.stop(child.id);
+  await tick(); t.mock.timers.tick(5000);
+  const snapshot = await stopping;
+  assert.equal(snapshot.state, "stopping");
+  assert.match(snapshot.error, /Git checkout still pending/);
+  assert.equal(h.supervisor.capacity, 0);
+  assert.equal((await h.supervisor.shutdown())[0].id, child.id);
+  pending.resolve(); await tick();
+  assert.equal(h.connections.length, 0);
+});
 
 test("exact selection refuses fuzzy catalog drift, wrong providers and missing state before sending any task", async t => {
   for (const model of [{ provider: "chosen", id: "requested-model-new" }, { provider: "other", id: "requested-model" }, undefined]) {

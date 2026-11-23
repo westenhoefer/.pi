@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { test } from "node:test";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -331,6 +332,46 @@ async function finishMember(h, index) {
   h.children()[index].event({ type: "agent_settled" }); await flush();
 }
 const deliver = (h, message) => h.emit("message_start", { message: { role: "custom", ...message } });
+
+test("worktree launches require a trusted source; default launches still use the session cwd", { skip }, async t => {
+  const h = await harness(t);
+  await assert.rejects(h.call("subagent_start", { agent: "worker", task: "Edit", worktree: true }), /trusted/);
+  await assert.rejects(h.call("swarm_start", { ...batch(1), worktree: true }), /trusted/);
+  await assert.rejects(h.call("swarm_start", { agent: "worker", worktree: true })); // simultaneous trust and manifest rejection
+  assert.equal(h.children().length, 0);
+  await h.call("subagent_start", { agent: "worker", task: "Shared" }); await flush();
+  assert.equal(h.children()[0].launch.cwd, h.ctx.cwd);
+});
+
+test("direct and swarm tools provision separate retained Git checkouts and report where to inspect them", { skip }, async t => {
+  const h = await harness(t);
+  const source = join(h.agentDir, "source");
+  // Reuse existing committed content offline without committing to or registering worktrees in the real repo.
+  execFileSync("git", ["clone", "--quiet", "--local", "--no-hardlinks", "--no-checkout", "--", process.cwd(), source]);
+  const base = execFileSync("git", ["-C", source, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+  h.ctx.cwd = source; h.ctx.isProjectTrusted = () => true;
+  await writeFile(join(source, "parent-only"), "untracked");
+  const direct = await h.call("subagent_start", { agent: "worker", task: "Edit", worktree: true });
+  const swarm = await h.call("swarm_start", { ...batch(2), worktree: true });
+  await t.waitFor(() => assert.equal(h.children().length, 3), { timeout: 15000 });
+  const paths = h.children().map(c => c.launch.cwd);
+  assert.equal(new Set(paths).size, 3);
+  for (const c of h.children()) {
+    assert.notEqual(c.launch.cwd, source);
+    assert.ok(c.launch.args.includes("--no-approve") && !c.launch.args.includes("--approve"));
+    assert.equal(execFileSync("git", ["-C", c.launch.cwd, "rev-parse", "HEAD"], { encoding: "utf8" }).trim(), base);
+    assert.ok(!(await readdir(c.launch.cwd)).includes("parent-only"));
+  }
+  for (let i = 0; i < 3; i++) await finishMember(h, i);
+  const status = await h.call("subagent_status", { id: direct.details.id });
+  assert.equal(status.details.state, "succeeded");
+  assert.equal(status.details.worktreePath, direct.details.worktreePath);
+  const results = (await h.call("swarm_results", { id: swarm.details.swarmId })).details.results;
+  assert.deepEqual(results.map(r => r.state), ["succeeded", "succeeded"]);
+  assert.deepEqual(new Set([status.details.worktreePath, ...results.map(r => r.worktreePath)]), new Set(paths));
+  await writeFile(join(paths[0], "child-only"), "retained");
+  for (const path of [source, ...paths.slice(1)]) assert.ok(!(await readdir(path)).includes("child-only"));
+});
 
 test("real loader: one whole-run dependency spans queued, active and completed-but-unconsumed tasks", { skip }, async t => {
   const h = await harness(t, { simpleSubagents: { maxConcurrency: 2 } });

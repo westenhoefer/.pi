@@ -23,6 +23,7 @@ function harness(path, options = {}) {
   let swarm, maximum = 0;
   const supervisor = new Supervisor({
     sessionId: "parent", maxConcurrency: options.ceiling ?? 5, configurationError: options.error,
+    worktreeDirectory: options.provisionWorktree && join(path, "checkouts"), provisionWorktree: options.provisionWorktree,
     onStarted(child) { swarm?.childStarted(child); },
     onChange(list) { maximum = Math.max(maximum, list.filter(child => ["starting", "running", "stopping"].includes(child.state)).length); swarm?.childrenChanged(list); },
     onComplete(child) { swarm?.childComplete(child); },
@@ -132,6 +133,43 @@ test("pause drains active attempts without completing the queued dependency; exp
     h.finish(1); await flush(); h.finish(2); await flush();
     assert.equal(h.children.length, 3); assert.equal(h.notifications.length, 2); assert.equal(h.notifications[1].delivery.final, true);
     assert.throws(() => h.swarm.resume(run.swarmId, h.launch, { allowed: true }), /No never-started/);
+  });
+});
+
+test("pinned worktree base survives reload; only admitted rows acquire a recorded path before spawn", async t => {
+  const base = "a".repeat(40), calls = [];
+  let id;
+  async function provisionWorktree(cwd, base, path) {
+    const record = new RunStore(cwd).load(id);
+    calls.push({ base, path, recordedPaths: record.outcomes.map(row => row.worktreePath) });
+  }
+  await withHarness(t, { ceiling: 1, provisionWorktree }, async (h, path) => {
+    const authority = { sessionId: "parent", allowed: true, loopId: "loop", round: 1 };
+    const input = { agent: "scout", tasks: tasks(2) };
+    const run = h.swarm.start(input, await loadManifest(input, path), profile, h.launch, authority, undefined, base);
+    id = run.swarmId; assert.equal(run.worktreeBase, base);
+    assert.equal(h.store.load(id).version, 2, "legacy readers must refuse this queue");
+    await flush(); assert.equal(calls.length, 1);
+    const firstPath = h.children[0].launch.cwd;
+    assert.deepEqual(calls[0], { base, path: firstPath, recordedPaths: [firstPath, undefined] });
+    h.swarm.pause(id); h.finish(0); await flush(); assert.equal(calls.length, 1);
+    await h.swarm.shutdown();
+
+    let allowed = false;
+    const fresh = harness(path, { provisionWorktree, authorize(query) { query.allowed = allowed; } });
+    try {
+      assert.equal(fresh.swarm.status(id).worktreeBase, base);
+      fresh.swarm.resume(id, fresh.launch, authority); await flush();
+      assert.equal(fresh.swarm.status(id).state, "paused"); assert.equal(calls.length, 1);
+      assert.deepEqual(fresh.swarm.results(id).results.map(row => row.worktreePath), [firstPath, undefined]);
+      allowed = true;
+      fresh.swarm.resume(id, fresh.launch, authority); await flush();
+      const secondPath = fresh.children[0].launch.cwd;
+      assert.notEqual(secondPath, firstPath); assert.equal(calls.length, 2);
+      assert.deepEqual(calls[1], { base, path: secondPath, recordedPaths: [firstPath, secondPath] });
+      fresh.finish(0); await flush();
+      assert.deepEqual(fresh.swarm.results(id).results.map(row => row.worktreePath), [firstPath, secondPath]);
+    } finally { await fresh.swarm.shutdown(); }
   });
 });
 

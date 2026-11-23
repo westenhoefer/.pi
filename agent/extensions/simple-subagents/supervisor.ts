@@ -1,22 +1,25 @@
 import { randomUUID } from "node:crypto";
+import { isAbsolute, join } from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import type { ChildIdentity } from "./contract.ts";
 import type { ModelSelection } from "./launch.ts";
 import type { ChildTransport, Connect, Launch, RpcRecord } from "./rpc.ts";
+import { provisionWorktree, worktreeEnvironment } from "./worktree.ts";
 
 export interface ChildUsage { input: number; output: number; cacheRead: number; cacheWrite: number; totalTokens: number; cost?: number }
 export type ChildState = "starting" | "running" | "stopping" | "succeeded" | "failed" | "blocked" | "cancelled" | "timed_out";
 export interface ChildSnapshot extends ChildIdentity {
   agent: string; task: string; state: ChildState; activity: string; output: string; outputTruncated: boolean;
-  error?: string; startedAt: number; endedAt?: number; swarmId?: string; taskId?: string; usage?: ChildUsage; selection?: ModelSelection;
+  worktreePath?: string; error?: string; startedAt: number; endedAt?: number; swarmId?: string; taskId?: string; usage?: ChildUsage; selection?: ModelSelection;
 }
-export interface StartInput { agent: string; task: string; launch: Launch; loopId?: string; timeoutSeconds?: number; swarmId?: string; taskId?: string }
+export interface StartInput { agent: string; task: string; launch: Launch; worktreeBase?: string; loopId?: string; timeoutSeconds?: number; swarmId?: string; taskId?: string }
 interface Child {
   snapshot: ChildSnapshot; transport?: ChildTransport; timer?: ReturnType<typeof setTimeout>;
-  finishing?: Promise<void>; lastStopReason?: string; lastError?: string;
+  preparing?: Promise<void>; finishing?: Promise<void>; lastStopReason?: string; lastError?: string;
 }
 export interface SupervisorOptions {
   sessionId: string; connect: Connect; maxConcurrency?: number; configurationError?: string;
+  worktreeDirectory?: string; provisionWorktree?: typeof provisionWorktree;
   onStarted: (child: ChildSnapshot) => void;
   onChange: (children: ChildSnapshot[]) => void;
   onComplete: (child: ChildSnapshot) => void;
@@ -50,8 +53,17 @@ export class Supervisor {
     if (!input.task.trim() || input.task.length > 16_000) throw new Error("Task must contain 1–16000 characters.");
     const timeout = input.timeoutSeconds ?? 900;
     if (!Number.isInteger(timeout) || timeout < 1 || timeout > 3600) throw new Error("Timeout must be 1–3600 seconds.");
+    const { launch, worktreeBase } = input;
+    const id = randomUUID();
+    let worktree: { path: string; base: string } | undefined;
+    if (worktreeBase !== undefined) {
+      const directory = this.options.worktreeDirectory;
+      if (!directory || !isAbsolute(directory)) throw new Error("An absolute worktree directory is required.");
+      worktree = { path: join(directory, id), base: worktreeBase };
+    }
     const child: Child = { snapshot: {
-      id: randomUUID(), sessionId: this.options.sessionId, loopId: input.loopId,
+      ...(worktree && { worktreePath: worktree.path }),
+      id, sessionId: this.options.sessionId, loopId: input.loopId,
       agent: input.agent, task: input.task, swarmId: input.swarmId, taskId: input.taskId, selection: input.launch.selection ? { ...input.launch.selection } : undefined,
       state: "starting", activity: "starting", output: "", outputTruncated: false, startedAt: Date.now(),
     } };
@@ -63,7 +75,7 @@ export class Supervisor {
     this.publish();
     child.timer = setTimeout(() => { void this.finish(child, "timed_out", "Child deadline exhausted."); }, timeout * 1000);
     // Run after returning the ID, so completion cannot precede launch registration.
-    queueMicrotask(() => { void this.run(child, input.launch); });
+    queueMicrotask(() => { void this.run(child, launch, worktree); });
     return { ...child.snapshot };
   }
 
@@ -99,9 +111,18 @@ export class Supervisor {
     return child;
   }
 
-  private async run(child: Child, launch: Launch): Promise<void> {
+  private async run(child: Child, launch: Launch, worktree?: { path: string; base: string }): Promise<void> {
     if (this.closed || child.finishing) return;
     try {
+      if (worktree) {
+        child.preparing = (this.options.provisionWorktree ?? provisionWorktree)(launch.cwd, worktree.base, worktree.path);
+        await child.preparing;
+        child.preparing = undefined;
+        if (this.closed || child.finishing) return;
+        const args = launch.args.filter(arg => arg !== "--approve" && arg !== "--no-approve");
+        const env = worktreeEnvironment(launch.env);
+        launch = { ...launch, cwd: worktree.path, args: [...args, "--no-approve"], env };
+      }
       child.transport = this.options.connect(launch, event => this.event(child, event), error => { void this.finish(child, "failed", error.message); });
       const state = await child.transport.request({ type: "get_state" });
       if (child.finishing) return;
@@ -162,6 +183,15 @@ export class Supervisor {
     // Set the guard before transport.close(), whose exit callbacks may run synchronously.
     child.finishing = Promise.resolve().then(async () => {
       try {
+        // A stop is not a receipt that Git has finished writing. run() handles preparation errors.
+        if (child.preparing) {
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          try {
+            await Promise.race([child.preparing.catch(() => {}), new Promise<never>((_, reject) => {
+              timer = setTimeout(() => reject(new Error(`Git checkout still pending at ${child.snapshot.worktreePath}; inspect Git processes before cleanup.`)), 5000);
+            })]);
+          } finally { clearTimeout(timer); }
+        }
         await child.transport?.close();
         child.snapshot.state = state;
         child.snapshot.endedAt = Date.now();

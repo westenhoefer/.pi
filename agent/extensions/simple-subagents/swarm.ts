@@ -25,10 +25,11 @@ export class SwarmExecutor {
   private options: SwarmOptions;
   constructor(options: SwarmOptions) { this.options = options; }
 
-  start(input: SwarmInput, items: ManifestItem[], profile: Profile, launch: Launch, authority: StartQuery, signal?: AbortSignal) {
+  start(input: SwarmInput, items: ManifestItem[], profile: Profile, launch: Launch, authority: StartQuery, signal?: AbortSignal, worktreeBase?: string) {
     if (this.closed) throw new Error("Swarm session is shutting down.");
     const record: RunRecord = {
-      version: 1, id: randomUUID(), createdAt: Date.now(), cwd: launch.cwd, profile: structuredClone(profile),
+      // Older runtimes must refuse worktree queues rather than resume in the source cwd.
+      version: worktreeBase === undefined ? 1 : 2, id: randomUUID(), createdAt: Date.now(), cwd: launch.cwd, worktreeBase, profile: structuredClone(profile),
       instruction: input.instruction ?? "", items: structuredClone(items), panel: input.panel ? { ...input.panel } : undefined,
       requestedParallelism: input.maxParallel ?? this.options.ceiling,
       timeoutSeconds: input.timeoutSeconds ?? 900, owner: { pid: 0, instance: "unarmed" }, state: "paused",
@@ -39,7 +40,8 @@ export class SwarmExecutor {
       this.options.store.save(record);
       this.arm(record, launch, authority, signal);
     } finally { if (!this.runs.has(record.id)) this.release(record.id); }
-    return { swarmId: record.id, taskCount: items.length, requestedParallelism: record.requestedParallelism, effectiveParallelism: this.limit(record), tools: [...record.profile.tools] };
+    return { swarmId: record.id, taskCount: items.length, requestedParallelism: record.requestedParallelism,
+      effectiveParallelism: this.limit(record), tools: [...record.profile.tools], worktreeBase: record.worktreeBase };
   }
 
   record(id: string): RunRecord { return structuredClone(this.runs.get(id)?.record ?? this.options.store.load(id)); }
@@ -51,7 +53,7 @@ export class SwarmExecutor {
     return {
       swarmId: id, state: record.state, panel: !!record.panel, armed: this.runs.get(id)?.record.state === "running",
       taskCount: record.items.length, counts, requestedParallelism: record.requestedParallelism, effectiveParallelism: this.limit(record),
-      cwd: record.cwd, tools: [...record.profile.tools], reason: record.reason,
+      cwd: record.cwd, worktreeBase: record.worktreeBase, tools: [...record.profile.tools], reason: record.reason,
       recoveryWarning: !this.runs.has(id) && record.outcomes.some(item => ["starting", "running", "stopping"].includes(item.state))
         ? "Recorded active attempts are not supervised here; liveness and cleanup are unconfirmed. No work was restarted." : undefined,
       attention: record.outcomes.filter(item => !["queued", "starting", "running", "succeeded"].includes(item.state)).slice(0, 5).map(item => ({ taskId: item.taskId, state: item.state, error: item.error })),
@@ -156,7 +158,7 @@ export class SwarmExecutor {
     const run = this.runs.get(child.swarmId)!;
     const index = run.record.outcomes.findIndex(item => item.taskId === child.taskId);
     const previous = run.record.outcomes[index];
-    run.record.outcomes[index] = { ...previous, attempt: 1, state: child.state, childId: child.id, startedAt: child.startedAt };
+    run.record.outcomes[index] = { ...previous, attempt: 1, state: child.state, childId: child.id, startedAt: child.startedAt, worktreePath: child.worktreePath };
     // This callback runs inside the supervisor reservation, before its spawn microtask.
     try { this.options.store.save(run.record); }
     catch (error) { run.record.outcomes[index] = previous; throw error; }
@@ -276,7 +278,7 @@ export class SwarmExecutor {
         const item = record.items[index];
         this.options.supervisor.start({ agent: record.profile.name, task: taskPrompt(item, record.instruction),
           launch: item.selection ? selectLaunch(run.launch, item.selection) : run.launch,
-          timeoutSeconds: record.timeoutSeconds, swarmId: record.id, taskId: item.id, loopId: run.authority.loopId });
+          timeoutSeconds: record.timeoutSeconds, worktreeBase: record.worktreeBase, swarmId: record.id, taskId: item.id, loopId: run.authority.loopId });
       }
       const pending = record.outcomes.some(item => ["queued", "starting", "running", "stopping"].includes(item.state));
       const activeCount = record.outcomes.filter(item => ["starting", "running"].includes(item.state) || (item.state === "stopping" && !item.error)).length;

@@ -6,7 +6,7 @@ A parent-TUI supervisor around fresh non-interactive Pi RPC children, with a dur
 
 Existing direct tools remain available:
 
-- `subagent_start({ agent, task, model?, thinking?, additionalTools?, timeoutSeconds? })`: reserve one child and return its exact ID. Optional `model` is an exact authenticated `provider/model` ID and overrides the role/parent for this child only; `thinking` defaults to the parent level and is clamped by the child. Registration is not task success.
+- `subagent_start({ agent, task, model?, thinking?, worktree?, additionalTools?, timeoutSeconds? })`: reserve one child and return its exact ID. Optional `model` is an exact authenticated `provider/model` ID and overrides the role/parent for this child only; `thinking` defaults to the parent level and is clamped by the child. Registration is not task success.
 - `subagent_status({ id? })`: list live/recent direct children, or read one retained report.
 - `subagent_steer({ id, message })`: queue guidance at a child tool-turn boundary; never restarts settled work.
 - `subagent_stop({ id })`: request termination; `stopping` means cleanup is unconfirmed.
@@ -54,6 +54,20 @@ swarm_start({
 Provide **exactly one** of `tasks` or `csvPath`. CSV requires a shared instruction. Headers must be nonempty and unique; quoted commas/newlines, escaped quotes, UTF-8 and an optional BOM are supported. Cells stay strings. Wholly empty records are ignored. Internal IDs use logical CSV record numbers (`row-2`, etc.); a business-data column named `id` is preserved and need not be unique. Every named column reaches exactly that row's child. The complete manifest is checked before dispatch; duplicate structured IDs, malformed CSV, invalid roles/limits or oversized tasks launch nothing.
 
 Run a separate `agent: "reviewer"` swarm for independently scoped reviews. It uses the same queue and pool; there is no automatic review/repair workflow or nested reviewer. The parent owns acceptance and cross-task integration. A `succeeded` outcome is successful execution, **not** an `accepted` verdict.
+
+## Per-child Git worktrees
+
+By default children work in the session cwd. To give a worker its own checkout, use:
+
+```typescript
+subagent_start({ agent: "worker", worktree: true, task: "Update the parser and its tests; return the checks you ran." })
+```
+
+On `swarm_start`, the same top-level `worktree: true` requests **one checkout per admitted item**, including CSV items. Git and a trusted non-bare source checkout with a committed HEAD are required. The base commit is resolved at submission and retained for queued members even if HEAD moves or the swarm resumes. Resume a worktree swarm from its original trusted cwd. Checkout starts only after admission; setup failure never falls back to the source cwd.
+
+The child starts at the **root** of a detached worktree, even if the parent started in a subdirectory. Staged, unstaged, ignored and untracked source files aren't copied. Provisioning disables Git hooks and Git protocol transfers, but checkout filters configured on this machine can execute programs or use the network. The new path isn't automatically trusted by Pi: the child uses `--no-approve`, so trust-gated project resources are skipped. A worktree separates working files and indexes, **not** OS permissions, shared refs or object storage.
+
+Direct start/status and swarm results report the planned `worktreePath` under `<agent-dir>/simple-subagents/worktrees/<child-id>`. Check state before relying on it. Worktrees remain after completion, cancellation or reload; failed setup may also leave files. Use `git worktree list` to locate registered checkouts later. Inspect changes in the exact checkout before integration or separately authorized cleanup. Pi never commits, merges, removes or prunes these worktrees for you.
 
 ## Model panels
 
@@ -152,7 +166,7 @@ Roles are read from `<agent-dir>/agents/<role>.md`: `worker`, `scout`, `reviewer
 
 Children start fresh. Shared instructions plus exactly one task/complete CSV row are passed, not the parent conversation or the rest of the batch. Normal global/project instructions and skill discovery remain active. The parent model/thinking is used unless the role pins a model; an explicit direct-launch model takes precedence over both. Panel models are explicitly selected and pinned per item. Child snapshots and outcomes record requested selection, updated to the actual model/effective thinking when the child reports it. Other provider extensions must be explicitly listed by the role; Cursor-selected children use the explicit child bootstrap above. Ambient extensions/templates/themes are disabled; the role and child runtime are explicit. Missing tools/providers fail without fallback. Child approval/input requests produce `blocked`; nothing is approved implicitly.
 
-All processes share user privileges and workspace access. These are capability/behavioral restrictions, **not a filesystem sandbox**. Ownership, approvals and verification expectations belong in self-contained task instructions. No worktree creation, commits, merging or hidden repair loops are added.
+All processes share user privileges and workspace access. These are capability/behavioral restrictions, **not a filesystem sandbox**. Ownership, approvals and verification expectations belong in self-contained task instructions. Worktree provisioning is opt-in and does not authorize commits, merging, cleanup or hidden repair loops.
 
 ## Goal-loop contract
 

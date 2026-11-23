@@ -1,6 +1,8 @@
 import { getAgentDir, getPackageDir, parseFrontmatter, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
+import { join } from "node:path";
+import { resolveWorktreeBase } from "./worktree.ts";
 import { fileURLToPath } from "node:url";
 import { CHILD_STARTED, COMPLETION_TYPE, START_QUERY, RUN_REGISTER, RUN_QUERY, RUN_REVOKED, RUN_NOTICE, SWARM_COMPLETION_TYPE, type RunRevoked, type StartQuery } from "./contract.ts";
 import { ADDITIONAL_TOOLS, buildLaunch, loadProfile, resolveSelection, ROLES, THINKING_LEVELS } from "./launch.ts";
@@ -12,7 +14,16 @@ import { SwarmExecutor } from "./swarm.ts";
 import { registerPanel } from "./panel.ts";
 
 const textResult = (text: string, details: unknown = {}) => ({ content: [{ type: "text" as const, text }], details });
-const summary = (child: ChildSnapshot) => `${child.id} · ${child.agent} · ${child.state}${child.selection ? ` · ${child.selection.provider}/${child.selection.model} (${child.selection.thinking})` : ""} · ${clean(child.activity, 100).replace(/\s+/g, " ")}`;
+const summary = (child: ChildSnapshot) => `${child.id} · ${child.agent} · ${child.state}${child.selection ? ` · ${child.selection.provider}/${child.selection.model} (${child.selection.thinking})` : ""} · ${clean(child.activity, 100).replace(/\s+/g, " ")}${child.worktreePath ? ` · worktree: ${child.worktreePath}` : ""}`;
+const worktreeSchema = Type.Optional(Type.Boolean({ description: "Provision a separate retained detached Git worktree per child at the current committed HEAD. Requires a trusted Git checkout. Default: share the session cwd." }));
+function requireWorktreeTrust(ctx: ExtensionContext, cwd: string) {
+  if (cwd !== ctx.cwd || !ctx.isProjectTrusted()) throw new Error("Worktree provisioning requires a trusted session in the source working directory.");
+}
+async function worktreeBase(ctx: ExtensionContext, enabled?: boolean) {
+  if (!enabled) return undefined;
+  requireWorktreeTrust(ctx, ctx.cwd);
+  return resolveWorktreeBase(ctx.cwd);
+}
 const additionalToolsSchema = Type.Optional(Type.Array(StringEnum(ADDITIONAL_TOOLS), {
   description: "Add built-in tools to this launch's role defaults (e.g. [\"bash\"] for child-side git/gh). Read-only roles stay read-only.",
 }));
@@ -46,7 +57,7 @@ export function registerSimpleSubagents(pi: ExtensionAPI, connect: Connect, opti
     const current = () => !shuttingDown && epoch === generation && owner?.sessionManager.getSessionId() === sessionId;
     supervisor = new Supervisor({
       sessionId,
-      connect, maxConcurrency: configuration.limit, configurationError: configuration.error,
+      connect, worktreeDirectory: join(agentDir, "simple-subagents", "worktrees"), maxConcurrency: configuration.limit, configurationError: configuration.error,
       onStarted(child) {
         if (child.swarmId) swarms!.childStarted(child);
         else pi.events.emit(CHILD_STARTED, { sessionId, id: child.id, loopId: child.loopId });
@@ -120,15 +131,15 @@ export function registerSimpleSubagents(pi: ExtensionAPI, connect: Connect, opti
 
   pi.registerTool({
     name: "subagent_start", label: "Start subagent",
-    description: "Start one session-owned Pi child and return its exact ID immediately. Roles: worker, scout, reviewer. Shares the user concurrency ceiling (default 5) with all swarms and roles. Fresh task context, current cwd, role defaults plus optional additionalTools (e.g. bash for git/gh). Default deadline 900s, max 3600s. Completion/failure automatically wakes the parent. No nested delegation, detached survival, or automatic restart.",
+    description: "Start one session-owned Pi child and return its exact ID immediately. Roles: worker, scout, reviewer. Shares the user concurrency ceiling (default 5) with all swarms and roles. Fresh task context, shared cwd unless worktree is requested, role defaults plus optional additionalTools (e.g. bash for git/gh). Default deadline 900s, max 3600s. Completion/failure automatically wakes the parent. No nested delegation, detached survival, or automatic restart.",
     promptGuidelines: [
       "Use subagent_start for parallel independent tasks. Give each child a self-contained objective, scope, relevant context and verification expectations; fresh children do not inherit this conversation.",
       "Select additionalTools on subagent_start or swarm_start when the child needs capabilities beyond role defaults, e.g. [\"bash\"] to gather git/gh evidence in its own context.",
       "At a dependency barrier, yield for automatic completion messages instead of polling or sleeping. Consume each child's result before dependent work. Successful execution is not independent proof of correctness.",
-      "Children share the working directory. Keep one writer per shared scope, and use subagent_steer for running children or subagent_stop for cancellation (Escape and /loop stop do not stop children).",
+      "By default children share the working directory. Use worktree: true on subagent_start or swarm_start when separate checkouts of committed HEAD are wanted. Keep one writer per shared scope, and use subagent_steer for running children or subagent_stop for cancellation (Escape and /loop stop do not stop children).",
     ],
     parameters: Type.Object({
-      agent: StringEnum(ROLES), task: Type.String({ minLength: 1, maxLength: 16000 }), additionalTools: additionalToolsSchema,
+      worktree: worktreeSchema, agent: StringEnum(ROLES), task: Type.String({ minLength: 1, maxLength: 16000 }), additionalTools: additionalToolsSchema,
       model: Type.Optional(Type.String({ minLength: 1, description: "Exact authenticated provider/model ID. Overrides role/parent selection for this child only." })),
       thinking: Type.Optional(StringEnum(THINKING_LEVELS)),
       timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 3600 })),
@@ -138,12 +149,12 @@ export function registerSimpleSubagents(pi: ExtensionAPI, connect: Connect, opti
       const registry = getSupervisor(ctx);
       const epoch = generation;
       const authority = authorize(ctx);
-      const profile = await loadProfile(agentDir, params.agent, parseFrontmatter, params.additionalTools);
+      const [profile, base] = await Promise.all([loadProfile(agentDir, params.agent, parseFrontmatter, params.additionalTools), worktreeBase(ctx, params.worktree)]);
       signal?.throwIfAborted();
       ctx.signal?.throwIfAborted();
       if (epoch !== generation || shuttingDown) throw new Error("Session changed during launch preparation.");
       const query = authorize(ctx, authority);
-      const child = registry.start({ agent: params.agent, task: params.task, timeoutSeconds: params.timeoutSeconds, launch: launch(profile, ctx, ctx.cwd, params.model, params.thinking), loopId: query.loopId });
+      const child = registry.start({ worktreeBase: base, agent: params.agent, task: params.task, timeoutSeconds: params.timeoutSeconds, launch: launch(profile, ctx, ctx.cwd, params.model, params.thinking), loopId: query.loopId });
       return textResult(`${summary(child)}\nTools: ${profile.tools.join(", ")}\nLaunch registered, not proof of success. Yield at a dependency barrier; completion will wake you automatically.`, { ...child, tools: profile.tools });
     },
   });
@@ -192,10 +203,10 @@ export function registerSimpleSubagents(pi: ExtensionAPI, connect: Connect, opti
   });
   pi.registerTool({
     name: "swarm_start", label: "Start swarm",
-    description: "Persist and execute a fixed batch of independent leaf tasks. Supply exactly one of tasks or csvPath; CSV requires instruction. Per-run maxParallel cannot raise the shared user ceiling (default 5). One attempt per item; deadline 1–3600s from dispatch. Returns promptly; one coalesced completion/needs-input wake, not one per row. Optional additionalTools adds built-in tools to role defaults for every member (e.g. bash for git/gh). Shared cwd is not isolation.",
+    description: "Persist and execute a fixed batch of independent leaf tasks. Supply exactly one of tasks or csvPath; CSV requires instruction. Per-run maxParallel cannot raise the shared user ceiling (default 5). One attempt per item; deadline 1–3600s from dispatch. Returns promptly; one coalesced completion/needs-input wake, not one per row. Optional additionalTools adds built-in tools to role defaults for every member (e.g. bash for git/gh). With worktree: true each admitted item gets its own Git checkout; otherwise children share the launch cwd.",
     parameters: Type.Object({
       tasks: Type.Optional(Type.Array(Type.Object({ id: Type.String({ minLength: 1, maxLength: 200 }), task: Type.String({ minLength: 1, maxLength: 16000 }) }), { minItems: 1 })),
-      csvPath: Type.Optional(Type.String({ minLength: 1 })), agent: StringEnum(ROLES), additionalTools: additionalToolsSchema,
+      worktree: worktreeSchema, csvPath: Type.Optional(Type.String({ minLength: 1 })), agent: StringEnum(ROLES), additionalTools: additionalToolsSchema,
       instruction: Type.Optional(Type.String({ maxLength: 16000 })), maxParallel: Type.Optional(Type.Integer({ minimum: 1 })),
       timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 3600 })),
     }),
@@ -205,10 +216,10 @@ export function registerSimpleSubagents(pi: ExtensionAPI, connect: Connect, opti
       if (configuration.error) throw new Error(configuration.error);
       const epoch = generation;
       const authority = authorize(ctx);
-      const [items, profile] = await Promise.all([loadManifest(params, ctx.cwd), loadProfile(agentDir, params.agent, parseFrontmatter, params.additionalTools)]);
+      const [items, profile, base] = await Promise.all([loadManifest(params, ctx.cwd), loadProfile(agentDir, params.agent, parseFrontmatter, params.additionalTools), worktreeBase(ctx, params.worktree)]);
       signal?.throwIfAborted(); ctx.signal?.throwIfAborted();
       if (epoch !== generation || shuttingDown) throw new Error("Session changed during swarm preparation.");
-      const result = swarms!.start(params, items, profile, launch(profile, ctx), authorize(ctx, authority), signal ?? ctx.signal);
+      const result = swarms!.start(params, items, profile, launch(profile, ctx), authorize(ctx, authority), signal ?? ctx.signal, base);
       return textResult(JSON.stringify(result), result);
     },
   });
@@ -233,6 +244,7 @@ export function registerSimpleSubagents(pi: ExtensionAPI, connect: Connect, opti
       if (action === "resume") {
         signal?.throwIfAborted(); ctx.signal?.throwIfAborted();
         const record = swarms!.record(params.id);
+        if (record.worktreeBase !== undefined) requireWorktreeTrust(ctx, record.cwd);
         swarms!.resume(params.id, launch(record.profile, ctx, record.cwd), authorize(ctx), signal ?? ctx.signal);
       } else if (action === "pause") swarms!.pause(params.id);
       else await swarms!.stop(params.id);
