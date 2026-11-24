@@ -27,11 +27,20 @@ const user = text => ({ role: "user", content: text, timestamp: Date.now() });
 const tool = name => ({ name, description: `Tool ${name}`, parameters: { type: "object", properties: { example: { type: "number" } } } });
 const textOf = msg => msg.content.filter(block => block.type === "text").map(block => block.text).join("");
 const testCwd = fileURLToPath(new URL("..", import.meta.url));
-async function setup(t, select = async () => "Deny", timeouts) {
+async function setup(t, select = async () => "Deny", timeouts, fixtureArgs = []) {
   const m = await load();
   const statuses = [];
+  const windows = [];
+  const wakeups = [];
   const ctx = { cwd: testCwd, hasUI: true, ui: { select, notify() {}, setStatus: (_key, value) => statuses.push(value) } };
-  const runtime = new m.AgyRuntime(() => ({ command: process.execPath, args: [fileURLToPath(new URL("./hybrid-agent.mjs", import.meta.url))] }), timeouts);
+  const runtime = new m.AgyRuntime(
+    () => ({ command: process.execPath, args: [fileURLToPath(new URL("./hybrid-agent.mjs", import.meta.url)), ...fixtureArgs] }),
+    {
+      ...timeouts,
+      onContextWindow: (modelId, size) => windows.push({ modelId, size }),
+      onWakeup: (id) => wakeups.push(id),
+    },
+  );
   t.after(() => runtime.reset());
   const opts = { signal: AbortSignal.timeout(5_000) };
   const models = await runtime.discover(ctx.cwd, opts.signal);
@@ -43,7 +52,7 @@ async function setup(t, select = async () => "Deny", timeouts) {
     const step = runtime.run(model, transcript, { ...opts, ...extraOpts }, ctx, allowed, new m.PiOutput(stream, model));
     return { stream, finish: async () => { await step; return stream.result(); } };
   }
-  return { runtime, start, statuses };
+  return { runtime, start, statuses, models, windows, wakeups, m };
 }
 
 test("one ACP turn combines native activity with a real Pi tool call and preserves the warm session", { skip }, async t => {
@@ -266,4 +275,128 @@ test("overall turn ceiling stops endlessly chattering turns without triggering P
   assert.equal(capped.errorMessage, "Antigravity exceeded the turn deadline. Check the workspace before resending the prompt.");
   assert.equal(m.isRetryableAssistantError(capped), false);
   assert.equal(runtime.running, false);
+});
+
+test("bridged Pi tools work when agentCapabilities omits mcpCapabilities, and fail on explicit http: false", { skip }, async t => {
+  const tools = [tool("fixture_tool")];
+  const { start: startOmitted } = await setup(t, undefined, undefined, ["--mcp-caps=omit"]);
+  const request = user("Both");
+  const handoff = await startOmitted([request], {}, tools).finish();
+  assert.equal(handoff.stopReason, "toolUse", handoff.errorMessage);
+  const [call] = handoff.content.filter(block => block.type === "toolCall");
+  const result = { role: "toolResult", toolName: call.name, toolCallId: call.id, isError: false, content: [{ type: "text", text: "ok" }], timestamp: Date.now() };
+  const completed = await startOmitted([request, handoff, result], {}, tools).finish();
+  assert.equal(completed.stopReason, "stop", completed.errorMessage);
+  assert.equal(textOf(completed), "After Pi tool: ok");
+
+  const { start: startDisabled } = await setup(t, undefined, undefined, ["--mcp-caps=false"]);
+  const rejected = await startDisabled([user("Both")], {}, tools).finish();
+  assert.equal(rejected.stopReason, "error");
+  assert.match(rejected.errorMessage, /does not support HTTP MCP/);
+});
+
+test("bridged tool allowlist defaults to codemode and honors explicit PI_AGY_ACP_TOOLS overrides", { skip }, async () => {
+  const m = await load();
+  assert.deepEqual([...m.parseBridgedTools(undefined)], ["codemode"]);
+  assert.deepEqual([...m.parseBridgedTools("")], []);
+  assert.deepEqual([...m.parseBridgedTools("  ,  ")], []);
+  assert.deepEqual([...m.parseBridgedTools("codemode, job_status")], ["codemode", "job_status"]);
+});
+
+test("models default to non-zero context windows and sync live usage_update.size without refresh", { skip }, async t => {
+  const { start, models, windows, m } = await setup(t);
+  assert.equal(m.fallbackModels[0].contextWindow, 1_048_576);
+  assert.equal(models[0].contextWindow, 1_048_576);
+  assert.equal(m.defaultContextWindow("other-model"), 200_000);
+
+  const reply = await start([user("Window update")]).finish();
+  assert.equal(reply.stopReason, "stop", reply.errorMessage);
+  assert.equal(models[0].contextWindow, 524_288);
+  assert.ok(windows.some(entry => entry.modelId === "gemini-fixture" && entry.size === 524_288));
+});
+
+test("post-end_turn background wakeup is adopted into a Pi turn and preserves the warm ACP session", { skip }, async t => {
+  const { start, runtime, wakeups, m } = await setup(t, undefined, { wakeupSettleMs: 60 });
+  const req1 = user("Bg wakeup");
+  const turn1 = await start([req1]).finish();
+  assert.equal(turn1.stopReason, "stop", turn1.errorMessage);
+  assert.equal(textOf(turn1), "tests running");
+
+  const deadline = Date.now() + 2_000;
+  while (!wakeups.length && Date.now() < deadline) await delay(10);
+  assert.equal(wakeups.length, 1);
+
+  // agent_settled must not tear down an unclaimed wakeup queued for Pi
+  await runtime.settle();
+  assert.equal(runtime.running, true);
+
+  const wakeupMsg = user(m.wakeupMessageText(wakeups[0]));
+  const adopted = await start([req1, turn1, wakeupMsg]).finish();
+  assert.equal(adopted.stopReason, "stop", adopted.errorMessage);
+  assert.equal(textOf(adopted), "34/34 passed");
+
+  // Warm session stayed intact: next prompt is promptCount === 2 (not 3)
+  const next = await start([req1, turn1, wakeupMsg, adopted, user("Followup")]).finish();
+  assert.equal(next.stopReason, "stop", next.errorMessage);
+  assert.equal(textOf(next), "gemini-fixture low 2 1 Followup");
+});
+
+test("multi-step background wakeup survives mid-turn usage_update, native tools, and bridged Pi tools", { skip }, async t => {
+  const { start, wakeups, m } = await setup(t, undefined, { wakeupSettleMs: 60 });
+  const tools = [tool("fixture_tool")];
+  const req1 = user("Bg wakeup tool");
+  const turn1 = await start([req1], {}, tools).finish();
+  assert.equal(turn1.stopReason, "stop", turn1.errorMessage);
+
+  const deadline = Date.now() + 2_000;
+  while (!wakeups.length && Date.now() < deadline) await delay(10);
+  assert.equal(wakeups.length, 1);
+
+  const wakeupMsg = user(m.wakeupMessageText(wakeups[0]));
+  const handoff = await start([req1, turn1, wakeupMsg], {}, tools).finish();
+  assert.equal(handoff.stopReason, "toolUse", handoff.errorMessage);
+  const [call] = handoff.content.filter(block => block.type === "toolCall");
+  assert.equal(call.name, "fixture_tool");
+  assert.deepEqual(call.arguments, { example: 9 });
+
+  const result = { role: "toolResult", toolName: call.name, toolCallId: call.id, isError: false, content: [{ type: "text", text: "ok" }], timestamp: Date.now() };
+  const completed = await start([req1, turn1, wakeupMsg, handoff, result], {}, tools).finish();
+  assert.equal(completed.stopReason, "stop", completed.errorMessage);
+  assert.equal(textOf(completed), "Wakeup after Pi tool: ok");
+});
+
+test("silent background tool completion does not open a spurious wakeup turn", { skip }, async t => {
+  const { start, wakeups } = await setup(t, undefined, { wakeupSettleMs: 40 });
+  const turn1 = await start([user("Silent bg")]).finish();
+  assert.equal(turn1.stopReason, "stop", turn1.errorMessage);
+  await delay(80);
+  assert.equal(wakeups.length, 0);
+});
+
+test("user prompt beating an unclaimed wakeup runs cleanly and stale wakeup sentinel is dropped", { skip }, async t => {
+  const { start, wakeups, m } = await setup(t, undefined, { wakeupSettleMs: 60 });
+  const req1 = user("Bg wakeup race");
+  const turn1 = await start([req1]).finish();
+  assert.equal(turn1.stopReason, "stop", turn1.errorMessage);
+
+  const deadline = Date.now() + 2_000;
+  while (!wakeups.length && Date.now() < deadline) await delay(10);
+  assert.equal(wakeups.length, 1);
+
+  // User prompt arrives before Pi dispatches the queued wakeup sentinel
+  const userPrompt = user("Actually do something else");
+  const userReply = await start([req1, turn1, userPrompt]).finish();
+  assert.equal(userReply.stopReason, "stop", userReply.errorMessage);
+  assert.match(textOf(userReply), /Actually do something else$/);
+
+  // Queued wakeup sentinel arrives afterwards -> completes silently without sending to agy
+  const staleWakeup = user(m.wakeupMessageText(wakeups[0]));
+  const dropped = await start([req1, turn1, userPrompt, userReply, staleWakeup]).finish();
+  assert.equal(dropped.stopReason, "stop", dropped.errorMessage);
+  assert.equal(textOf(dropped), "");
+
+  // Next user prompt still reuses the warm session
+  const after = await start([req1, turn1, userPrompt, userReply, staleWakeup, dropped, user("Still warm")]).finish();
+  assert.equal(after.stopReason, "stop", after.errorMessage);
+  assert.equal(textOf(after), "gemini-fixture low 2 1 Still warm");
 });

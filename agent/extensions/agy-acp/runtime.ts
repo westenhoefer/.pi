@@ -1,10 +1,11 @@
+import { randomUUID } from "node:crypto";
 import { getCurrentTools, type SimpleStreamOptions, type TranscriptContext } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { AcpClient, type Launch } from "./acp.ts";
 import { type AgyModel, cleanLabel, discoverModels, effortFor, readSelector, record } from "./agy-models.ts";
 import { type ConversationMessage, makePrompt, projectGuidance, stamp, toolResultsSince } from "./context.ts";
 import { startBridge, type BridgeTool } from "./mcp.ts";
-import { NativeTurn, PiOutput, toolError, type TurnTimeouts } from "./turn.ts";
+import { DEFAULT_WAKEUP_SETTLE_MS, NativeTurn, PiOutput, toolError, type TurnTimeouts } from "./turn.ts";
 
 const controlTimeoutMs = 45_000;
 const cancelled = { outcome: { outcome: "cancelled" } };
@@ -16,21 +17,51 @@ const init = {
 
 type Bridge = Awaited<ReturnType<typeof startBridge>>;
 type Discovery = { controller: AbortController; client?: AcpClient };
+interface WakeupState {
+  id: string;
+  turn: NativeTurn;
+  claimed: boolean;
+  activeTools: Set<string>;
+  sawText: boolean;
+}
 interface Binding {
   client: AcpClient;
   bridge?: Bridge;
+  ctx?: ExtensionContext;
   id?: string;
   image: boolean;
   toolsKey: string;
   guidance: string;
   model?: string;
+  lastTimeoutMs?: number;
   prefix?: { count: number; hash: string };
   turn?: NativeTurn;
+  wakeup?: WakeupState;
   turnCleanup?: () => void;
   dialog?: AbortController;
   config?: unknown;
   defaultThinking?: string;
   nativeTitle?: string;
+}
+
+export interface AgyRuntimeOptions extends TurnTimeouts {
+  onContextWindow?: (modelId: string, contextWindow: number) => void;
+  onWakeup?: (wakeupId: string) => void;
+}
+
+export const WAKEUP_CUSTOM_TYPE = "agy-acp-wakeup";
+const wakeupPattern = /^\[Antigravity background continuation ([a-z0-9-]+)\]$/i;
+
+export function wakeupMessageText(id: string): string {
+  return `[Antigravity background continuation ${id}]`;
+}
+
+export function parseWakeupId(message: ConversationMessage | undefined): string | undefined {
+  if (message?.role !== "user") return undefined;
+  let text: string | undefined;
+  if (typeof message.content === "string") text = message.content;
+  else if (message.content.length === 1 && message.content[0]?.type === "text") text = message.content[0].text;
+  return text ? wakeupPattern.exec(text.trim())?.[1] : undefined;
 }
 
 function rpcSettings(signal: AbortSignal) { return { signal, timeoutMs: controlTimeoutMs }; }
@@ -51,6 +82,13 @@ function userError(cause: unknown, promptStarted = false): string {
   return cause instanceof Error ? cause.message : "Antigravity ACP failed.";
 }
 
+export const DEFAULT_BRIDGED_TOOLS = ["codemode"] as const;
+
+export function parseBridgedTools(value: string | undefined): Set<string> {
+  if (value === undefined) return new Set(DEFAULT_BRIDGED_TOOLS);
+  return new Set(value.split(",").map(name => name.trim()).filter(Boolean));
+}
+
 export function selectedTools(context: TranscriptContext, allow: ReadonlySet<string>, active: readonly string[]): BridgeTool[] {
   const activeNames = new Set(active);
   return getCurrentTools(context.messages).filter(tool => allow.has(tool.name) && activeNames.has(tool.name) && !nativeToolNames.has(tool.name));
@@ -64,9 +102,15 @@ export class AgyRuntime {
   #blocked = false;
   #windows = new Map<string, number>();
   readonly #timeouts: TurnTimeouts;
+  readonly #wakeupSettleMs: number;
+  readonly #onContextWindow?: (modelId: string, contextWindow: number) => void;
+  readonly #onWakeup?: (wakeupId: string) => void;
 
-  constructor(readonly launch: () => Launch, timeouts: TurnTimeouts = {}) {
-    this.#timeouts = timeouts;
+  constructor(readonly launch: () => Launch, options: AgyRuntimeOptions = {}) {
+    this.#timeouts = options;
+    this.#wakeupSettleMs = options.wakeupSettleMs ?? DEFAULT_WAKEUP_SETTLE_MS;
+    this.#onContextWindow = options.onContextWindow;
+    this.#onWakeup = options.onWakeup;
   }
 
   get running() { return !!this.#binding?.client.alive; }
@@ -111,14 +155,27 @@ export class AgyRuntime {
       const currentTools = new Set(tools.map(tool => tool.name));
       const prefix = binding?.prefix;
       const matches = !!prefix && messages.length >= prefix.count && stamp(messages.slice(0, prefix.count)) === prefix.hash;
+      const incomingWakeupId = parseWakeupId(messages.at(-1));
+      const adoptWakeup = !!binding?.wakeup && !binding.wakeup.claimed && !!incomingWakeupId
+        && binding.wakeup.id === incomingWakeupId && matches && binding.model === model.id;
+      if (incomingWakeupId && !adoptWakeup) {
+        // Stale or superseded wakeup sentinel (e.g. user prompted first or session reset).
+        out.start();
+        if (binding?.prefix && matches) {
+          binding.prefix = { count: messages.length + 1, hash: stamp([...messages, out.message]) };
+        }
+        out.done("stop");
+        return;
+      }
+      const userBeatWakeup = !!binding?.wakeup && !binding.wakeup.claimed && !incomingWakeupId;
       const parked = !!binding?.turn && binding.turn.dispatched.size > 0 && matches && binding.model === model.id;
-      if (binding?.turn && !parked) throw new Error("Cannot resume the pending Antigravity tool call on a different Pi conversation.");
+      if (binding?.turn && !parked && !adoptWakeup && !userBeatWakeup) throw new Error("Cannot resume the pending Antigravity tool call on a different Pi conversation.");
       // ACP v1 cannot steer an in-flight prompt. Restart with the tool results as history and
       // the new instruction as user input, rather than continuing the old plan or dropping the steer.
       const steered = parked && messages.slice(prefix!.count).some(message => message.role === "user");
       const resume = parked && !steered;
 
-      if (binding && (steered || (!resume && (!binding.client.alive || !matches || binding.toolsKey !== toolsKey || binding.guidance !== guidance || binding.model !== model.id)))) {
+      if (binding && (steered || userBeatWakeup || (!resume && !adoptWakeup && (!binding.client.alive || !matches || binding.toolsKey !== toolsKey || binding.guidance !== guidance || binding.model !== model.id)))) {
         await this.closeBinding(binding);
         binding = undefined;
       }
@@ -126,11 +183,21 @@ export class AgyRuntime {
         signal.throwIfAborted();
         binding = await this.open(ctx, tools, toolsKey, guidance, signal);
       }
+      binding.ctx = ctx;
+      binding.lastTimeoutMs = opts.timeoutMs;
       signal.throwIfAborted();
       let turn: NativeTurn;
       if (resume && binding.turn && prefix) {
         turn = binding.turn;
         if (!turn.result) turn.deliver(toolResultsSince(messages, prefix.count), currentTools);
+      } else if (adoptWakeup && binding.wakeup) {
+        binding.wakeup.claimed = true;
+        turn = binding.wakeup.turn;
+        const owner = binding;
+        const onAbort = () => { void this.closeBinding(owner).catch(() => {}); };
+        opts.signal?.addEventListener("abort", onAbort, { once: true });
+        binding.turnCleanup = () => opts.signal?.removeEventListener("abort", onAbort);
+        if (opts.signal?.aborted) onAbort();
       } else {
         await this.select(binding, model, opts, signal);
         const prompt = makePrompt(messages, binding.prefix?.count ?? 0, guidance, !!binding.bridge);
@@ -159,7 +226,7 @@ export class AgyRuntime {
         for (let update = turn.updates.shift(); update; update = turn.updates.shift()) {
           await opts.onProviderStreamEvent?.(update, model);
           signal.throwIfAborted();
-          this.renderUpdate(update, model.id, ctx, out);
+          this.renderUpdate(update, model, ctx, out);
         }
         if (turn.result) {
           if ("error" in turn.result) throw turn.result.error;
@@ -213,7 +280,9 @@ export class AgyRuntime {
 
   /** Keep warm sessions across successful Pi turns; cancel an abandoned MCP handoff. */
   async settle() {
-    if (this.#binding?.turn) await this.closeBinding(this.#binding);
+    if (this.#binding?.turn && !(this.#binding.wakeup && !this.#binding.wakeup.claimed)) {
+      await this.closeBinding(this.#binding);
+    }
   }
 
   async reset() {
@@ -227,16 +296,24 @@ export class AgyRuntime {
       client: new AcpClient(this.launch(), {
         cwd: ctx.cwd,
         onUpdate: (params) => this.update(binding, params),
-        onPermission: (params) => this.permission(binding, ctx, params),
+        onPermission: (params) => this.permission(binding, binding.ctx ?? ctx, params),
       }),
-      image: false, guidance, toolsKey,
+      ctx, image: false, guidance, toolsKey,
     };
     this.#binding = binding;
     const caps = checkProtocol(await binding.client.request("initialize", init, rpcSettings(signal)));
     binding.image = record(caps?.promptCapabilities)?.image === true;
     if (tools.length) {
-      if (record(caps?.mcpCapabilities)?.http !== true) throw new Error("agy did not advertise HTTP MCP; cannot expose the requested Pi tools.");
-      const bridge = await startBridge(tools, (name, args, caller) => binding.turn?.call(name, args, caller) ?? Promise.resolve(toolError("No active Antigravity turn.")));
+      // Antigravity ACP Server (e.g. 1.5.12) omits agentCapabilities.mcpCapabilities even though
+      // session/new.mcpServers supports HTTP MCP servers; only block an explicit http: false.
+      if (record(caps?.mcpCapabilities)?.http === false) throw new Error("agy does not support HTTP MCP; cannot expose the requested Pi tools.");
+      const bridge = await startBridge(tools, (name, args, caller) => {
+        if (!binding.turn && this.#binding === binding && binding.prefix && this.#onWakeup) {
+          this.beginWakeup(binding);
+        }
+        if (binding.wakeup) binding.wakeup.sawText = false;
+        return binding.turn?.call(name, args, caller) ?? Promise.resolve(toolError("No active Antigravity turn."));
+      });
       if (signal.aborted || this.#binding !== binding) {
         await bridge.close();
         throw new Error("Antigravity session was closed during setup.");
@@ -272,15 +349,83 @@ export class AgyRuntime {
     binding.model = model.id;
   }
 
+  private recordContextWindow(modelId: string | undefined, update: Record<string, unknown>, activeModel?: AgyModel) {
+    if (!modelId) return;
+    const size = update.size;
+    if (typeof size !== "number" || !Number.isSafeInteger(size) || size <= 0) return;
+    this.#windows.set(modelId, size);
+    if (activeModel && activeModel.id === modelId && activeModel.contextWindow !== size) activeModel.contextWindow = size;
+    this.#onContextWindow?.(modelId, size);
+  }
+
+  private beginWakeup(binding: Binding): WakeupState {
+    const id = randomUUID();
+    const turn = new NativeTurn({
+      idleTimeoutMs: binding.lastTimeoutMs ?? this.#timeouts.idleTimeoutMs,
+      turnTimeoutMs: this.#timeouts.turnTimeoutMs,
+    });
+    const wakeup: WakeupState = { id, turn, claimed: false, activeTools: new Set(), sawText: false };
+    binding.turn = turn;
+    binding.wakeup = wakeup;
+    this.#onWakeup?.(id);
+    return wakeup;
+  }
+
+  private updateWakeupProgress(wakeup: WakeupState, update: Record<string, unknown>) {
+    const kind = update.sessionUpdate;
+    const content = record(update.content);
+    const toolId = typeof update.toolCallId === "string" ? update.toolCallId : undefined;
+    switch (kind) {
+      case "agent_message_chunk":
+        wakeup.turn.cancelSettle();
+        if (content?.type === "text" && typeof content.text === "string" && content.text.length > 0) wakeup.sawText = true;
+        break;
+      case "agent_thought_chunk":
+        wakeup.turn.cancelSettle();
+        break;
+      case "tool_call":
+        wakeup.turn.cancelSettle();
+        wakeup.sawText = false;
+        if (toolId && update.status !== "completed" && update.status !== "failed") wakeup.activeTools.add(toolId);
+        break;
+      case "tool_call_update":
+        wakeup.turn.cancelSettle();
+        if (toolId && (update.status === "completed" || update.status === "failed")) wakeup.activeTools.delete(toolId);
+        break;
+      case "usage_update":
+        if (!wakeup.turn.waitingOnHost && (wakeup.sawText || wakeup.activeTools.size === 0)) {
+          wakeup.turn.armSettle(this.#wakeupSettleMs);
+        }
+        break;
+    }
+  }
+
   private update(binding: Binding, params: unknown) {
     const envelope = record(params);
     const update = record(envelope?.update);
     if (this.#binding !== binding || !binding.id || envelope?.sessionId !== binding.id || !update) return;
     if (update.sessionUpdate === "config_option_update" && Array.isArray(update.configOptions)) binding.config = update;
-    binding.turn?.update(update);
+    if (update.sessionUpdate === "usage_update") this.recordContextWindow(binding.model, update);
+
+    if (!binding.turn) {
+      if (update.sessionUpdate === "tool_call_update" && (update.status === "completed" || update.status === "failed")) {
+        binding.ctx?.ui.setStatus("agy-acp", undefined);
+        return;
+      }
+      const content = record(update.content);
+      const hasText = content?.type === "text" && typeof content.text === "string" && content.text.length > 0;
+      const startsWakeup = (update.sessionUpdate === "agent_message_chunk" && hasText)
+        || (update.sessionUpdate === "agent_thought_chunk" && hasText)
+        || update.sessionUpdate === "tool_call";
+      if (!startsWakeup || !binding.prefix || !this.#onWakeup) return;
+      this.beginWakeup(binding);
+    }
+
+    binding.turn!.update(update);
+    if (binding.wakeup) this.updateWakeupProgress(binding.wakeup, update);
   }
 
-  private renderUpdate(update: Record<string, unknown>, model: string, ctx: ExtensionContext, out: PiOutput) {
+  private renderUpdate(update: Record<string, unknown>, model: AgyModel, ctx: ExtensionContext, out: PiOutput) {
     const content = record(update.content);
     switch (update.sessionUpdate) {
       case "agent_message_chunk":
@@ -300,15 +445,18 @@ export class AgyRuntime {
         break;
       }
       case "usage_update":
-        if (typeof update.size === "number" && Number.isSafeInteger(update.size) && update.size > 0) this.#windows.set(model, update.size);
+        this.recordContextWindow(model.id, update, model);
         break;
     }
   }
 
   private async permission(binding: Binding, ctx: ExtensionContext, params: unknown) {
     const input = record(params);
+    if (this.#binding !== binding || !binding.id || input?.sessionId !== binding.id || binding.dialog || !ctx.hasUI) return cancelled;
+    if (!binding.turn && binding.prefix && this.#onWakeup) this.beginWakeup(binding);
     const turn = binding.turn;
-    if (this.#binding !== binding || !binding.id || input?.sessionId !== binding.id || !turn || turn.result || turn.abort.signal.aborted || binding.dialog || !ctx.hasUI) return cancelled;
+    if (!turn || turn.result || turn.abort.signal.aborted) return cancelled;
+    if (binding.wakeup) binding.wakeup.sawText = false;
     turn.beginPermission();
     try {
       const options = Array.isArray(input.options) ? input.options.map(record) : [];
@@ -354,6 +502,7 @@ export class AgyRuntime {
     binding.dialog?.abort();
     turn.stop(new Error("Antigravity turn finished."));
     binding.turn = undefined;
+    binding.wakeup = undefined;
   }
 
   private async closeBinding(binding: Binding | undefined) {

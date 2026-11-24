@@ -2,14 +2,30 @@ import { createAssistantMessageEventStream, type Provider, type SimpleStreamOpti
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { type AgyModel, PROVIDER_ID, fallbackModels } from "./agy-models.ts";
 import { agyLaunch } from "./launch.ts";
-import { AgyRuntime, selectedTools } from "./runtime.ts";
+import { AgyRuntime, parseBridgedTools, selectedTools, WAKEUP_CUSTOM_TYPE, wakeupMessageText } from "./runtime.ts";
 import { PiOutput } from "./turn.ts";
 
 export default function (pi: ExtensionAPI) {
-  const runtime = new AgyRuntime(() => agyLaunch());
-  const allow = new Set((process.env.PI_AGY_ACP_TOOLS ?? "").split(",").map(name => name.trim()).filter(Boolean));
   let models = fallbackModels;
   let session: ExtensionContext | undefined;
+  const runtime = new AgyRuntime(() => agyLaunch(), {
+    onContextWindow(modelId, size) {
+      const entry = models.find(model => model.id === modelId);
+      if (entry && entry.contextWindow !== size) entry.contextWindow = size;
+      if (session?.model?.provider === PROVIDER_ID && session.model.id === modelId && session.model.contextWindow !== size) {
+        session.model.contextWindow = size;
+      }
+    },
+    onWakeup(wakeupId) {
+      if (!session || session.mode !== "tui" || !session.isProjectTrusted() || session.model?.provider !== PROVIDER_ID) return;
+      pi.sendMessage({
+        customType: WAKEUP_CUSTOM_TYPE,
+        content: wakeupMessageText(wakeupId),
+        display: false,
+      }, { deliverAs: "followUp", triggerTurn: true });
+    },
+  });
+  const allow = parseBridgedTools(process.env.PI_AGY_ACP_TOOLS);
 
   const stream = (model: AgyModel, transcript: TranscriptContext, opts: SimpleStreamOptions = {}) => {
     const events = createAssistantMessageEventStream();

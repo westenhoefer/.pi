@@ -12,14 +12,14 @@ On Windows this launches `%USERPROFILE%\bin\agy.cmd acp --stdio` through `cmd.ex
 
 ### Optional Pi tools
 
-Nothing is bridged by default. To expose an exact comma-separated list of **active** Pi tools, launch a new Pi process from PowerShell, in the workspace you want Antigravity to use:
+`codemode` is bridged by default whenever it is an active Pi tool (so Antigravity can reach Pi's configured MCP servers and extensions through `pi__codemode`). To override the allowlist with an exact comma-separated list of **active** Pi tools—or set `''` to disable bridging altogether—launch a new Pi process from PowerShell, in the workspace you want Antigravity to use:
 
 ```powershell
-$env:PI_AGY_ACP_TOOLS = 'job_status'
+$env:PI_AGY_ACP_TOOLS = 'codemode,job_status'
 pi
 ```
 
-The example only works if `job_status` is an active Pi tool. Use `/agy-acp status` to check the intersection. Allowlisted calls appear as `pi__*` MCP tools on the Antigravity side and execute as ordinary Pi tool calls, subject to Pi's tool hooks. Overlapping Pi built-ins (`read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`) remain hidden.
+Tools are only exposed when active in Pi. Use `/agy-acp status` to check the intersection. Allowlisted calls appear as `pi__*` MCP tools on the Antigravity side and execute as ordinary Pi tool calls, subject to Pi's tool hooks. Overlapping Pi built-ins (`read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`) remain hidden.
 
 ## Boundaries
 

@@ -44,7 +44,11 @@ export function readSelector(session: unknown, category: "model" | "thought_leve
 
 const modelIdPattern = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/u;
 
-function toModel(id: string, name: string, image: boolean, contextWindow = 0): AgyModel {
+export function defaultContextWindow(id: string): number {
+  return /^gemini-/u.test(id) ? 1_048_576 : 200_000;
+}
+
+function toModel(id: string, name: string, image: boolean, contextWindow = defaultContextWindow(id)): AgyModel {
   return {
     id, name, provider: PROVIDER_ID, api: API, baseUrl: "acp://antigravity",
     input: image ? ["text", "image"] : ["text"],

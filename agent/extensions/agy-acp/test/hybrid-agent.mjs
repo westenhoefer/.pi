@@ -24,10 +24,14 @@ async function callBridge(message) {
 async function handle(request) {
   const { method, params } = request;
   switch (method) {
-    case "initialize":
+    case "initialize": {
       if (Object.keys(params.clientCapabilities).length) throw new Error("Pi offered extra client capabilities");
-      reply(request, { protocolVersion: 1, agentCapabilities: { mcpCapabilities: { http: true }, promptCapabilities: { image: true } } });
+      const mode = process.argv.find(arg => arg.startsWith("--mcp-caps="))?.slice("--mcp-caps=".length);
+      const mcpCapabilities = mode === "omit" ? undefined : mode === "false" ? { http: false } : { http: true };
+      const agentCapabilities = { promptCapabilities: { image: true }, ...(mcpCapabilities ? { mcpCapabilities } : {}) };
+      reply(request, { protocolVersion: 1, agentCapabilities });
       return;
+    }
     case "session/new":
       bridge = params.mcpServers[0];
       reply(request, { sessionId: sid, ...config() });
@@ -65,6 +69,51 @@ async function handle(request) {
         send({ id: "permission", method: "session/request_permission", params: { sessionId: sid, toolCall: { title: "Run fixture tool", rawInput }, options: [
           { optionId: "allow", kind: "allow_once" }, { optionId: "deny", kind: "reject_once" }, { optionId: "always", kind: "allow_always" },
         ] } });
+        return;
+      }
+      if (last === "Window update") {
+        update({ sessionUpdate: "usage_update", used: 1200, size: 524_288 });
+        text("window updated");
+        reply(request, { stopReason: "end_turn", usage: { inputTokens: 10, outputTokens: 5, cachedReadTokens: 0 } });
+        return;
+      }
+      if (last === "Silent bg") {
+        update({ sessionUpdate: "tool_call", toolCallId: "bg-silent", title: "Silent bg job", status: "in_progress" });
+        text("started silent bg");
+        reply(request, { stopReason: "end_turn", usage: { inputTokens: 4, outputTokens: 2, cachedReadTokens: 0 } });
+        setTimeout(() => {
+          update({ sessionUpdate: "tool_call_update", toolCallId: "bg-silent", status: "completed" });
+        }, 15);
+        return;
+      }
+      if (last === "Bg wakeup" || last === "Bg wakeup race") {
+        update({ sessionUpdate: "tool_call", toolCallId: "bg-1", title: "Run tests", status: "in_progress" });
+        text("tests running");
+        reply(request, { stopReason: "end_turn", usage: { inputTokens: 4, outputTokens: 2, cachedReadTokens: 0 } });
+        setTimeout(() => {
+          update({ sessionUpdate: "tool_call_update", toolCallId: "bg-1", status: "completed" });
+          text("34/34 passed");
+          update({ sessionUpdate: "usage_update", used: 9000, size: 1_048_576 });
+        }, 20);
+        return;
+      }
+      if (last === "Bg wakeup tool") {
+        update({ sessionUpdate: "tool_call", toolCallId: "bg-2", title: "Run tests", status: "in_progress" });
+        text("tests running");
+        reply(request, { stopReason: "end_turn", usage: { inputTokens: 4, outputTokens: 2, cachedReadTokens: 0 } });
+        setTimeout(async () => {
+          update({ sessionUpdate: "tool_call_update", toolCallId: "bg-2", status: "completed" });
+          update({ sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "Checking result" } });
+          // Emit usage_update immediately before a follow-up native tool call (matches real agy 1.5.12)
+          update({ sessionUpdate: "usage_update", used: 9100, size: 1_048_576 });
+          await new Promise(resolve => setTimeout(resolve, 10));
+          update({ sessionUpdate: "tool_call", toolCallId: "bg-2-followup", title: "Inspect log", status: "in_progress" });
+          await new Promise(resolve => setTimeout(resolve, 10));
+          update({ sessionUpdate: "tool_call_update", toolCallId: "bg-2-followup", status: "completed" });
+          const result = await callBridge({ method: "tools/call", id: "wakeup-call", params: { name: "pi__fixture_tool", arguments: { example: 9 } } });
+          text(`Wakeup after Pi tool: ${result.content[0].text}`);
+          update({ sessionUpdate: "usage_update", used: 9400, size: 1_048_576 });
+        }, 20);
         return;
       }
       if (last === "Both" || last === "Parked") {

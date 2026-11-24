@@ -11,11 +11,13 @@ interface PendingCall {
 
 export const DEFAULT_IDLE_TIMEOUT_MS = 5 * 60_000;
 export const DEFAULT_TURN_TIMEOUT_MS = 2 * 60 * 60_000;
+export const DEFAULT_WAKEUP_SETTLE_MS = 350;
 const MAX_TIMER_MS = 2_147_483_647;
 
 export interface TurnTimeouts {
   idleTimeoutMs?: number;
   turnTimeoutMs?: number;
+  wakeupSettleMs?: number;
 }
 
 function resolveTimeout(value: number | undefined, fallback: number, message: string): number | undefined {
@@ -40,6 +42,7 @@ export class NativeTurn {
   readonly #idleTimeoutMs?: number;
   #idleTimer?: ReturnType<typeof setTimeout>;
   #turnTimer?: ReturnType<typeof setTimeout>;
+  #settleTimer?: ReturnType<typeof setTimeout>;
   #permissions = 0;
 
   constructor(options: TurnTimeouts = {}) {
@@ -74,8 +77,29 @@ export class NativeTurn {
     this.notify();
   }
 
+  get waitingOnHost(): boolean {
+    return this.#waitingOnHost();
+  }
+
+  armSettle(ms: number) {
+    this.cancelSettle();
+    if (this.result || this.abort.signal.aborted || this.#waitingOnHost()) return;
+    this.#settleTimer = setTimeout(() => {
+      this.#settleTimer = undefined;
+      if (this.result || this.abort.signal.aborted || this.#waitingOnHost()) return;
+      this.complete({ stopReason: "end_turn" });
+    }, ms);
+    this.#settleTimer.unref?.();
+  }
+
+  cancelSettle() {
+    clearTimeout(this.#settleTimer);
+    this.#settleTimer = undefined;
+  }
+
   beginPermission() {
     if (this.result || this.abort.signal.aborted) return;
+    this.cancelSettle();
     this.#permissions++;
     this.#refreshIdle();
   }
@@ -99,6 +123,7 @@ export class NativeTurn {
   call(name: string, args: Record<string, unknown>, signal: AbortSignal): Promise<BridgeResult> {
     if (this.result || this.abort.signal.aborted || signal.aborted) return Promise.resolve(toolError("No active Pi turn owns this tool call."));
     if (this.incoming.length + this.dispatched.size >= 16) return Promise.resolve(toolError("Too many pending Pi tools."));
+    this.cancelSettle();
     const tool: ToolCall = { type: "toolCall", name, arguments: args, id: `agy_pi_${randomUUID()}` };
     return new Promise(resolve => {
       let entry!: PendingCall;
@@ -166,6 +191,7 @@ export class NativeTurn {
     this.#idleTimer = undefined;
     clearTimeout(this.#turnTimer);
     this.#turnTimer = undefined;
+    this.cancelSettle();
   }
 
   #refreshIdle() {
